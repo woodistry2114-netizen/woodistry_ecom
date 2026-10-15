@@ -159,8 +159,63 @@ function WoodistryImage({ src, alt = '', className = '', imageClassName = '', lo
 }
 
 // ============================================================
-// WOODISTRY HEADER + MEGA MENU
+// WOODISTRY HEADER + DYNAMIC PRODUCT MEGA MENU
 // ============================================================
+
+const megaMenuProductImage = product => {
+  if (!product) return ''
+  const candidates = [
+    product.image,
+    product.imageUrl,
+    product.thumbnail,
+    product.mainImage,
+    product.featuredImage,
+    product.images?.[0],
+    product.gallery?.[0],
+    product.media?.[0]
+  ]
+  const image = candidates.find(value => typeof value === 'string' && value.trim())
+    || candidates.find(value => value && typeof value === 'object')
+  if (typeof image === 'string') return image.trim()
+  if (image && typeof image === 'object') {
+    return image.url || image.secure_url || image.src || image.imageUrl || ''
+  }
+  return ''
+}
+
+const chooseMegaMenuProduct = (items, previousProduct) => {
+  const available = (Array.isArray(items) ? items : []).filter(
+    product => megaMenuProductImage(product)
+  )
+  if (!available.length) return null
+
+  const previousId = previousProduct?.id || previousProduct?._id || previousProduct?.slug
+  const alternatives = available.filter(product =>
+    String(product.id || product._id || product.slug) !== String(previousId)
+  )
+  const pool = alternatives.length ? alternatives : available
+  return pool[Math.floor(Math.random() * pool.length)]
+}
+
+function MegaMenuImage({ src, fallbackSrc, alt }) {
+  const [imageSrc, setImageSrc] = useState(src || fallbackSrc)
+
+  useEffect(() => {
+    setImageSrc(src || fallbackSrc)
+  }, [src, fallbackSrc])
+
+  return (
+    <img
+      className="wood-mega-feature-image"
+      src={imageSrc || fallbackSrc}
+      alt={alt || ''}
+      loading="eager"
+      onError={() => {
+        if (fallbackSrc && imageSrc !== fallbackSrc) setImageSrc(fallbackSrc)
+      }}
+    />
+  )
+}
 
 function Header() {
   const [open, setOpen] = useState(false)
@@ -168,8 +223,11 @@ function Header() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [announcementText, setAnnouncementText] = useState('Complimentary delivery on orders over $1,500')
   const [announcementEnabled, setAnnouncementEnabled] = useState(true)
+  const [menuProducts, setMenuProducts] = useState([])
+  const [livingProduct, setLivingProduct] = useState(null)
+  const [seasonalProduct, setSeasonalProduct] = useState(null)
   const { user } = useAuth()
-  const { count } = useStore()
+  const { count, products: storeProducts = [] } = useStore()
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -189,6 +247,40 @@ function Header() {
     return () => { cancelled = true }
   }, [])
 
+  // Fetch the current catalogue from the API so Admin product updates appear here too.
+  useEffect(() => {
+    let cancelled = false
+    async function loadMegaMenuProducts() {
+      try {
+        const result = await productService.list({ limit: 100 })
+        const payload = result?.data ?? result
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.products)
+            ? payload.products
+            : Array.isArray(payload?.items)
+              ? payload.items
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : Array.isArray(payload?.data?.products)
+                  ? payload.data.products
+                  : Array.isArray(payload?.results)
+                    ? payload.results
+                    : []
+        const contextProducts = Array.isArray(storeProducts) ? storeProducts : []
+        const source = list.length ? list : contextProducts
+        if (!cancelled) {
+          const active = source.filter(product => product && product.enabled !== false && product.isActive !== false)
+          setMenuProducts(active)
+        }
+      } catch (error) {
+        console.error('Mega menu product load error:', error)
+      }
+    }
+    loadMegaMenuProducts()
+    return () => { cancelled = true }
+  }, [])
+
   const navItems = [
     { label: 'Shop', to: '/shop' },
     { label: 'Living', to: '/shop?category=Living%20Room' },
@@ -197,6 +289,39 @@ function Header() {
     { label: 'Gift', to: '/shop?category=Gift' },
     { label: 'About', to: '/about' }
   ]
+
+  const openShopMenu = () => {
+    setMenuOpen(true)
+
+    const livingProducts = menuProducts.filter(product =>
+      /living\s*room|living-room|lounge|sofa|couch|armchair|accent chair|coffee table/i.test(
+        `${product.category || ''} ${product.name || ''} ${product.collection || ''}`
+      )
+    )
+
+    const markedSeasonalProducts = menuProducts.filter(product =>
+      product.seasonal === true ||
+      product.isSeasonal === true ||
+      /seasonal|spring|summer|autumn|fall|winter/i.test(
+        `${product.collection || ''} ${product.collectionName || ''} ${product.tag || ''} ${Array.isArray(product.tags) ? product.tags.join(' ') : product.tags || ''} ${product.name || ''}`
+      )
+    )
+    // If the catalogue has no explicit seasonal flag yet, still feature a real catalogue item.
+    const seasonalProducts = markedSeasonalProducts.length
+      ? markedSeasonalProducts
+      : (menuProducts.filter(product => !livingProducts.includes(product) && megaMenuProductImage(product)).length
+          ? menuProducts.filter(product => !livingProducts.includes(product) && megaMenuProductImage(product))
+          : menuProducts.filter(product => megaMenuProductImage(product)))
+
+    setLivingProduct(current => chooseMegaMenuProduct(livingProducts, current))
+    setSeasonalProduct(current => chooseMegaMenuProduct(seasonalProducts, current))
+  }
+
+  const productLink = product => product?.slug
+    ? `/product/${product.slug}`
+    : product?._id || product?.id
+      ? `/product/${product._id || product.id}`
+      : '/shop'
 
   return (
     <>
@@ -224,7 +349,10 @@ function Header() {
         <nav className={`wood-nav ${open ? 'is-open' : ''}`}>
           {navItems.map(item => (
             <Link key={item.label} to={item.to}
-              onMouseEnter={() => setMenuOpen(item.label === 'Shop')}
+              onMouseEnter={() => {
+                if (item.label === 'Shop') openShopMenu()
+                else setMenuOpen(false)
+              }}
               onClick={() => { setOpen(false); setMenuOpen(false) }}>
               {item.label}{item.label === 'Shop' && <ChevronDown size={12} />}
             </Link>
@@ -246,13 +374,29 @@ function Header() {
               <Link to="/shop?category=Bedroom">Bedroom</Link>
               <Link to="/shop?filter=new">New arrivals</Link>
             </div>
-            <Link to="/shop?category=Living%20Room" className="wood-mega-feature">
-              <WoodistryImage className="wood-mega-feature-image" src={woodistrySpaces[0].image} alt="Living room collection"/>
-              <span><small>THE LIVING EDIT</small><strong>Make room for living.</strong><em>Shop now →</em></span>
+            <Link to={livingProduct ? productLink(livingProduct) : '/shop?category=Living%20Room'} className="wood-mega-feature">
+              <MegaMenuImage
+                src={megaMenuProductImage(livingProduct)}
+                fallbackSrc={woodistrySpaces[0].image}
+                alt={livingProduct?.name || 'Living room collection'}
+              />
+              <span>
+                <small>THE LIVING EDIT</small>
+                <strong>{livingProduct?.name || 'Make room for living.'}</strong>
+                <em>Shop now →</em>
+              </span>
             </Link>
-            <Link to="/shop?filter=new" className="wood-mega-feature">
-              <WoodistryImage className="wood-mega-feature-image" src={woodistrySpaces[1].image} alt="Dining collection"/>
-              <span><small>SEASONAL COLLECTION</small><strong>Gather beautifully.</strong><em>Discover →</em></span>
+            <Link to={seasonalProduct ? productLink(seasonalProduct) : '/shop?filter=seasonal'} className="wood-mega-feature">
+              <MegaMenuImage
+                src={megaMenuProductImage(seasonalProduct)}
+                fallbackSrc={woodistrySpaces[1].image}
+                alt={seasonalProduct?.name || 'Seasonal collection'}
+              />
+              <span>
+                <small>SEASONAL COLLECTION</small>
+                <strong>{seasonalProduct?.name || 'Gather beautifully.'}</strong>
+                <em>Discover →</em>
+              </span>
             </Link>
             <button className="wood-mega-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={19}/></button>
           </div>
@@ -775,7 +919,6 @@ function Home() {
   const { bestSellingProducts, newArrivals } = useStore()
   const [heroSlides, setHeroSlides] = useState(defaultHeroSlides)
   const [heroIndex, setHeroIndex] = useState(0)
-  const [heroPaused, setHeroPaused] = useState(false)
   const heroTouchStart = useRef(null)
   const [sectionImages, setSectionImages] = useState({
     brandStory: '',
@@ -838,9 +981,7 @@ function Home() {
           }
         })
         // Keep all three homepage hero slides available even if CMS has fewer entries.
-        while (normalizedSlides.length < 3) {
-          normalizedSlides.push(defaultHeroSlides[normalizedSlides.length])
-        }
+        
         if (!cancelled) setHeroSlides(normalizedSlides.length ? normalizedSlides : defaultHeroSlides)
       } catch (error) { console.error('Hero CMS load error:', error) }
     }
@@ -849,10 +990,12 @@ function Home() {
   }, [])
 
   useEffect(() => {
-    if (heroPaused || heroSlides.length < 2) return undefined
-    const timer = window.setInterval(() => setHeroIndex(current => (current + 1) % heroSlides.length), 3000)
+    if (heroSlides.length < 2) return undefined
+    const timer = window.setInterval(() => {
+      setHeroIndex(current => (current + 1) % heroSlides.length)
+    }, 5000)
     return () => window.clearInterval(timer)
-  }, [heroPaused, heroSlides.length])
+  }, [heroSlides.length])
 
   const goToHero = index => setHeroIndex(((index % heroSlides.length) + heroSlides.length) % heroSlides.length)
 
@@ -870,7 +1013,7 @@ function Home() {
     <>
       <Header />
       <main className="wood-home">
-        <section className="wood-hero" onMouseEnter={() => setHeroPaused(true)} onMouseLeave={() => setHeroPaused(false)}
+        <section className="wood-hero"
           onTouchStart={event => { heroTouchStart.current = event.touches[0]?.clientX ?? null }}
           onTouchEnd={event => { const start = heroTouchStart.current; const finish = event.changedTouches[0]?.clientX ?? null; if (start !== null && finish !== null && Math.abs(start - finish) > 45) goToHero(heroIndex + (start > finish ? 1 : -1)); heroTouchStart.current = null }}>
           <style>{`
@@ -896,13 +1039,15 @@ function Home() {
                 className={`wood-hero-slide-image${active ? ' is-active' : ''}`}
                 src={slide.image || fallbackImage}
                 alt={slide.alt || 'Woodistry furniture'}
-                loading={index === 0 ? 'eager' : 'lazy'}
+                loading="eager"
+                decoding="async"
                 onError={event => {
                   const image = event.currentTarget
-                  if (fallbackImage && image.src !== new URL(fallbackImage, window.location.href).href) {
-                    image.src = fallbackImage
+                  const fallbackUrl = fallbackImage ? new URL(fallbackImage, window.location.href).href : ''
+                  if (fallbackUrl && image.src !== fallbackUrl) {
+                    image.src = fallbackUrl
                   } else {
-                    image.style.display = 'none'
+                    image.style.visibility = 'hidden'
                   }
                 }}
               />
@@ -916,7 +1061,6 @@ function Home() {
             <Link className="wood-primary-button" to="/shop">Explore Collection <ArrowRight size={17}/></Link>
           </div>
           <div className="wood-hero-pagination">
-            <div className="wood-hero-numbers">{heroSlides.map((slide, index) => <button key={index} className={heroIndex === index ? 'active' : ''} onClick={() => goToHero(index)} aria-label={`Go to slide ${index + 1}`}>{String(index + 1).padStart(2, '0')}</button>)}</div>
             <div className="wood-hero-arrows"><button onClick={() => goToHero(heroIndex - 1)} aria-label="Previous slide">←</button><button onClick={() => goToHero(heroIndex + 1)} aria-label="Next slide">→</button></div>
           </div>
         </section>
@@ -933,6 +1077,306 @@ function Home() {
               ? (bestSellingProducts.length ? bestSellingProducts.slice(0, 5) : newArrivals.slice(0, 5)).map(product => <WoodistryBestSellerCard product={product} key={product.id || product._id || product.slug}/>)
               : woodistrySampleProducts.map(product => <article className="wood-demo-product" key={product.name}><Link to="/shop" className="wood-demo-image"><WoodistryImage className="wood-demo-product-image" src={product.image} alt={product.name} loading="lazy"/><span className="wood-demo-heart"><Heart size={19}/></span><span className="wood-demo-quick">Explore collection</span></Link><Link to="/shop" className="wood-demo-name">{product.name}</Link><p>{product.material}</p><strong>{product.price}</strong></article>)}
           </div></div>
+        </section>
+
+        {/* ==========================================================
+            CRAFTED TO LAST — MATERIALS & DURABILITY
+            The independent quality strip sits immediately below this section.
+            ========================================================== */}
+        <section className="wood-durability-section" data-xaaj-reveal="up" aria-labelledby="wood-durability-title">
+          <style>{`
+            .wood-durability-section {
+              --durability-paper: #eee7dc;
+              --durability-ink: #29231d;
+              --durability-muted: #6f665b;
+              --durability-line: #d2c3b0;
+              display: grid;
+              grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+              width: 100%;
+              margin: 62px 0 0;
+              background: var(--durability-paper);
+              color: var(--durability-ink);
+              overflow: hidden;
+            }
+            .wood-durability-visual {
+              position: relative;
+              min-width: 0;
+              min-height: 640px;
+              overflow: hidden;
+              background: #ded0bd;
+            }
+            .wood-durability-photo-shell {
+              position: absolute;
+              inset: 0;
+              width: 100%;
+              height: 100%;
+            }
+            .wood-durability-photo {
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
+              object-position: center center;
+              transition: transform .9s cubic-bezier(.2,.65,.3,1);
+            }
+            .wood-durability-section:hover .wood-durability-photo { transform: scale(1.025); }
+            .wood-durability-copy {
+              min-width: 0;
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              padding: clamp(30px, 4.1vw, 64px);
+            }
+            .wood-durability-kicker {
+              display: flex;
+              align-items: center;
+              gap: 14px;
+              margin: 0 0 22px;
+              color: #806344;
+              font: 700 10px/1.5 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+              letter-spacing: .22em;
+              text-transform: uppercase;
+            }
+            .wood-durability-kicker::after { content: ''; display: inline-block; width: 48px; height: 1px; background: #b9a58b; }
+            .wood-durability-title {
+              margin: 0 0 22px;
+              max-width: 680px;
+              color: var(--durability-ink);
+              font: 400 clamp(39px, 4.1vw, 61px)/1.04 var(--wood-serif, 'Playfair Display', Georgia, serif);
+              letter-spacing: -.045em;
+            }
+            .wood-durability-title em { color: #967653; font-style: normal; }
+            .wood-durability-intro {
+              max-width: 660px;
+              margin: 0 0 28px;
+              color: var(--durability-muted);
+              font: 400 14px/1.85 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+            }
+            .wood-durability-points {
+              display: grid;
+              grid-template-columns: repeat(3, minmax(0, 1fr));
+              gap: 18px;
+              margin: 0 0 29px;
+            }
+            .wood-durability-point { min-width: 0; }
+            .wood-durability-point-image {
+              display: block;
+              width: 100%;
+              aspect-ratio: 1.3 / 1;
+              margin: 0 0 13px;
+              overflow: hidden;
+              background: #ddd1c2;
+            }
+            .wood-durability-point-image .woodistry-image-shell { width: 100%; height: 100%; min-height: 0; }
+            .wood-durability-point-image .woodistry-image-content { object-fit: cover; transition: transform .7s cubic-bezier(.2,.65,.3,1), opacity .55s ease; }
+            .wood-durability-point:hover .wood-durability-point-image .woodistry-image-content { transform: scale(1.045); }
+            .wood-durability-number {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              margin: 0 0 9px;
+              color: #8b775e;
+              font: 600 10px/1.4 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+              letter-spacing: .12em;
+            }
+            .wood-durability-number::after { content: ''; display: inline-block; width: 35px; height: 1px; background: #c9b9a4; }
+            .wood-durability-point h3 {
+              margin: 0 0 8px;
+              color: var(--durability-ink);
+              font: 400 clamp(16px, 1.45vw, 21px)/1.25 var(--wood-serif, 'Playfair Display', Georgia, serif);
+              letter-spacing: -.025em;
+            }
+            .wood-durability-point p {
+              margin: 0;
+              color: var(--durability-muted);
+              font: 400 12px/1.7 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+            }
+            .wood-durability-link {
+              align-self: flex-start;
+              display: inline-flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 24px;
+              min-height: 47px;
+              padding: 0 17px;
+              border: 1px solid #b5a48e;
+              color: var(--durability-ink);
+              text-decoration: none;
+              font: 600 10px/1.3 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+              letter-spacing: .1em;
+              text-transform: uppercase;
+              transition: background .25s ease, color .25s ease, border-color .25s ease;
+            }
+            .wood-durability-link:hover { background: #30251b; border-color: #30251b; color: #fffaf3; }
+            @media (max-width: 1080px) {
+              .wood-durability-section { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
+              .wood-durability-visual { min-height: 650px; }
+              .wood-durability-copy { padding: 32px; }
+              .wood-durability-title { font-size: clamp(36px, 4.2vw, 48px); }
+              .wood-durability-points { gap: 12px; }
+            }
+            @media (max-width: 760px) {
+              .wood-durability-section { grid-template-columns: 1fr; margin: 42px 0 0; }
+              .wood-durability-visual { min-height: 0; height: min(100vw, 520px); }
+              .wood-durability-copy { padding: 34px 24px 38px; }
+              .wood-durability-title { font-size: clamp(39px, 10vw, 54px); }
+              .wood-durability-intro { font-size: 13px; margin-bottom: 24px; }
+              .wood-durability-points { gap: 12px; }
+              .wood-durability-point h3 { font-size: 17px; }
+              .wood-durability-point p { font-size: 11px; }
+            }
+            @media (max-width: 420px) {
+              .wood-durability-points { grid-template-columns: 1fr; gap: 21px; }
+              .wood-durability-point { display: grid; grid-template-columns: 112px minmax(0,1fr); column-gap: 14px; align-items: start; }
+              .wood-durability-point-image { grid-row: 1 / span 3; margin: 0; aspect-ratio: 1 / 1.05; }
+              .wood-durability-number { margin-top: 2px; }
+              .wood-durability-point h3 { font-size: 19px; }
+            }
+            @media (prefers-reduced-motion: reduce) {
+              .wood-durability-photo, .wood-durability-point-image .woodistry-image-content, .wood-durability-link { transition: none; }
+            }
+          `}</style>
+          <div className="wood-durability-visual">
+            <WoodistryImage
+              className="wood-durability-photo-shell"
+              imageClassName="wood-durability-photo"
+              src="/durability-craft.jpg"
+              alt="A craftsperson applying a protective finish to a walnut furniture surface"
+              loading="lazy"
+            />
+          </div>
+          <div className="wood-durability-copy">
+            <span className="wood-durability-kicker">Built for a longer tomorrow</span>
+            <h2 className="wood-durability-title" id="wood-durability-title">
+              Crafted to last.<br /><em>Beauty that endures.</em>
+            </h2>
+            <p className="wood-durability-intro">
+              Thoughtful materials, careful construction and considered finishes help each piece stand up to everyday living. Where a protective or anti-termite treatment is specified, its details should be confirmed on the individual product.
+            </p>
+            <div className="wood-durability-points">
+              <article className="wood-durability-point">
+                <div className="wood-durability-point-image">
+                  <WoodistryImage src="/durability-materials.jpg" alt="Close-up of selected solid wood materials" loading="lazy" />
+                </div>
+                <span className="wood-durability-number">01</span>
+                <h3>Premium Materials</h3>
+                <p>Natural character and quality materials selected with care.</p>
+              </article>
+              <article className="wood-durability-point">
+                <div className="wood-durability-point-image">
+                  <WoodistryImage src="/durability-joinery.jpg" alt="Close-up of precise wooden furniture joinery" loading="lazy" />
+                </div>
+                <span className="wood-durability-number">02</span>
+                <h3>Thoughtful Construction</h3>
+                <p>Careful detailing and considered craftsmanship for daily use.</p>
+              </article>
+              <article className="wood-durability-point">
+                <div className="wood-durability-point-image">
+                  <WoodistryImage src="/durability-finish.jpg" alt="Protective finish on a wood surface" loading="lazy" />
+                </div>
+                <span className="wood-durability-number">03</span>
+                <h3>Protective Finishes</h3>
+                <p>Finishes and treatments can help resist wear where specified.</p>
+              </article>
+            </div>
+            <Link className="wood-durability-link" to="/about">
+              Discover our materials <ArrowRight size={15} />
+            </Link>
+          </div>
+        </section>
+
+        {/* Independent full-width quality strip — visually separate from Crafted to Last */}
+        <section className="wood-quality-strip" aria-label="Furniture quality principles">
+          <style>{`
+            /* Independent four-column principles section styled from the supplied reference */
+            .wood-quality-strip {
+              display: grid;
+              grid-template-columns: repeat(4, minmax(0, 1fr));
+              align-items: start;
+              width: 100%;
+              padding: 88px clamp(22px, 5.2vw, 108px) 92px;
+              background: #efedeb;
+              color: #343230;
+              border: 0;
+            }
+            .wood-quality-item {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: flex-start;
+              gap: 0;
+              min-width: 0;
+              min-height: 0;
+              padding: 12px clamp(12px, 2vw, 34px) 8px;
+              color: #999894;
+              text-align: center;
+            }
+            .wood-quality-item + .wood-quality-item { border: 0; }
+            .wood-quality-item > svg {
+              display: block;
+              flex: 0 0 auto;
+              width: 52px;
+              height: 52px;
+              margin: 0 0 58px;
+              stroke-width: 1.15;
+              color: #9c9a96;
+            }
+            .wood-quality-item > span {
+              display: block;
+              width: 100%;
+              max-width: 320px;
+              min-width: 0;
+            }
+            .wood-quality-item strong {
+              display: block;
+              margin: 0 0 16px;
+              color: #343230;
+              font: 400 clamp(21px, 1.65vw, 28px)/1.32 var(--wood-serif, 'Playfair Display', Georgia, serif);
+              letter-spacing: 0;
+            }
+            .wood-quality-item small {
+              display: block;
+              color: #65635f;
+              font: 400 clamp(14px, 1.08vw, 18px)/1.9 var(--wood-sans, 'DM Sans', Arial, sans-serif);
+              letter-spacing: .015em;
+            }
+            @media (max-width: 1050px) {
+              .wood-quality-strip { padding: 66px 24px 70px; }
+              .wood-quality-item { padding: 10px 14px 8px; }
+              .wood-quality-item > svg { width: 43px; height: 43px; margin-bottom: 36px; }
+              .wood-quality-item strong { font-size: 21px; margin-bottom: 12px; }
+              .wood-quality-item small { font-size: 14px; line-height: 1.8; }
+            }
+            @media (max-width: 760px) {
+              .wood-quality-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px 20px; padding: 48px 20px 54px; }
+              .wood-quality-item { padding: 8px 10px; }
+              .wood-quality-item > svg { width: 38px; height: 38px; margin-bottom: 24px; }
+              .wood-quality-item strong { font-size: 19px; margin-bottom: 10px; }
+              .wood-quality-item small { font-size: 13px; line-height: 1.75; }
+            }
+            @media (max-width: 460px) {
+              .wood-quality-strip { grid-template-columns: 1fr; gap: 34px; padding: 40px 22px 46px; }
+              .wood-quality-item { padding: 4px 16px; }
+              .wood-quality-item > svg { width: 36px; height: 36px; margin-bottom: 18px; }
+              .wood-quality-item strong { font-size: 21px; margin-bottom: 8px; }
+              .wood-quality-item small { max-width: 300px; font-size: 14px; }
+            }
+          `}</style>
+          <div className="wood-quality-item">
+            <Gem aria-hidden="true" />
+            <span><strong>Natural &amp; Durable</strong><small>Materials that age beautifully</small></span>
+          </div>
+          <div className="wood-quality-item">
+            <ShieldCheck aria-hidden="true" />
+            <span><strong>Protection Where Specified</strong><small>Treatment depends on the product</small></span>
+          </div>
+          <div className="wood-quality-item">
+            <Package aria-hidden="true" />
+            <span><strong>Made for Everyday Living</strong><small>Considered for daily use</small></span>
+          </div>
+          <div className="wood-quality-item">
+            <Check aria-hidden="true" />
+            <span><strong>Crafted with Care</strong><small>Attention to the finer details</small></span>
+          </div>
         </section>
 
         <section className="wood-editorial wood-brand-story" data-xaaj-reveal="up">
@@ -2090,14 +2534,60 @@ function Shop() {
     )
   }
 
-  let list = (liveProducts || []).filter(product =>
+  const originalProducts = Array.isArray(liveProducts) ? liveProducts : []
+  let list = originalProducts.filter(product =>
     categoryMatches(product, category) &&
     (!search || normalized(product.name).includes(normalized(search)) ||
-      normalized(product.description || product.desc).includes(normalized(search)))
+      normalized(product.description || product.desc || product.shortDescription).includes(normalized(search)))
   )
 
-  if (sort === 'low') list = [...list].sort((a, b) => Number(a.price || 0) - Number(b.price || 0))
-  if (sort === 'high') list = [...list].sort((a, b) => Number(b.price || 0) - Number(a.price || 0))
+  // Keep the default catalogue order for Featured / Most relevant. For the other
+  // options, sort a copy so the context's original product array is never mutated.
+  const numericValue = (...values) => {
+    for (const value of values) {
+      const number = Number(value)
+      if (value !== undefined && value !== null && value !== '' && Number.isFinite(number)) return number
+    }
+    return 0
+  }
+  const dateValue = product => {
+    const raw = product.createdAt || product.created_at || product.dateAdded || product.publishedAt || product.created || product.updatedAt || product.updated_at
+    const parsed = raw ? new Date(raw).getTime() : 0
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  const soldValue = product => numericValue(
+    product.totalSold, product.soldCount, product.unitsSold, product.salesCount,
+    product.ordersCount, product.orderCount, product.sales, product.popularity
+  )
+
+  switch (sort) {
+    case 'best-selling':
+      list = [...list].sort((a, b) => soldValue(b) - soldValue(a))
+      break
+    case 'title-asc':
+      list = [...list].sort((a, b) => String(a.name || a.title || '').localeCompare(String(b.name || b.title || ''), 'en', { sensitivity: 'base' }))
+      break
+    case 'title-desc':
+      list = [...list].sort((a, b) => String(b.name || b.title || '').localeCompare(String(a.name || a.title || ''), 'en', { sensitivity: 'base' }))
+      break
+    case 'low':
+      list = [...list].sort((a, b) => numericValue(a.price) - numericValue(b.price))
+      break
+    case 'high':
+      list = [...list].sort((a, b) => numericValue(b.price) - numericValue(a.price))
+      break
+    case 'date-asc':
+      list = [...list].sort((a, b) => dateValue(a) - dateValue(b))
+      break
+    case 'date-desc':
+      list = [...list].sort((a, b) => dateValue(b) - dateValue(a))
+      break
+    case 'relevant':
+    case 'featured':
+    default:
+      // Keep API/catalogue order as the source of Featured and Most relevant.
+      break
+  }
 
   const heading = category || (search ? `Search: ${search}` : 'Furniture for considered living')
 
@@ -2119,11 +2609,17 @@ function Shop() {
               <p>Thoughtfully crafted furniture. Natural materials. Pieces made to feel at home.</p>
             </div>
             <label className="wood-shop-sort-label">
-              <span className="sr-only">Sort products</span>
+              <span className="wood-shop-sort-caption">Sort by:</span>
               <select value={sort} onChange={event => setSort(event.target.value)} aria-label="Sort products">
-                <option value="featured">Sort: Featured</option>
-                <option value="low">Price: Low to High</option>
-                <option value="high">Price: High to Low</option>
+                <option value="featured">Featured</option>
+                <option value="relevant">Most relevant</option>
+                <option value="best-selling">Best selling</option>
+                <option value="title-asc">Alphabetically, A–Z</option>
+                <option value="title-desc">Alphabetically, Z–A</option>
+                <option value="low">Price, low to high</option>
+                <option value="high">Price, high to low</option>
+                <option value="date-asc">Date, old to new</option>
+                <option value="date-desc">Date, new to old</option>
               </select>
             </label>
           </div>
@@ -5185,868 +5681,31 @@ function App() {
 
   if (path === '/about') {
     return (
-      <>
-        <Header />
-
-        <style>{`
-          .xaaj-about {
-            --ink: #25231f;
-            --muted: #756f66;
-            --paper: #f5f1e9;
-            --paper-2: #ebe5da;
-            --line: rgba(37,35,31,.14);
-            --accent: #a84d35;
-            background: var(--paper);
-            color: var(--ink);
-            overflow: hidden;
-          }
-
-          .xaaj-about *,
-          .xaaj-about *::before,
-          .xaaj-about *::after {
-            box-sizing: border-box;
-          }
-
-          /* ================= HERO ================= */
-
-          .xaaj-about-hero {
-            width: min(1380px, calc(100% - 32px));
-            min-height: 720px;
-            margin: 16px auto 0;
-            display: grid;
-            grid-template-columns: .84fr 1.16fr;
-            background: #e9e1d5;
-            overflow: hidden;
-          }
-
-          .xaaj-about-hero-copy {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            padding: 74px clamp(34px, 6vw, 92px);
-          }
-
-          .xaaj-about-eyebrow {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 28px;
-            color: var(--accent);
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: .28em;
-            text-transform: uppercase;
-          }
-
-          .xaaj-about-eyebrow::before {
-            content: '';
-            width: 30px;
-            height: 1px;
-            background: currentColor;
-          }
-
-          .xaaj-about-hero h1 {
-            max-width: 620px;
-            margin: 0;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(55px, 6.5vw, 94px);
-            font-weight: 400;
-            line-height: .91;
-            letter-spacing: -.06em;
-          }
-
-          .xaaj-about-hero h1 em {
-            color: var(--accent);
-            font-style: italic;
-          }
-
-          .xaaj-about-hero-description {
-            max-width: 475px;
-            margin: 31px 0 0;
-            color: #666057;
-            font-size: 14px;
-            line-height: 1.9;
-          }
-
-          .xaaj-about-hero-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 9px;
-            width: fit-content;
-            margin-top: 32px;
-            padding-bottom: 9px;
-            border-bottom: 1px solid var(--ink);
-            color: var(--ink);
-            text-decoration: none;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: .12em;
-            text-transform: uppercase;
-          }
-
-          .xaaj-about-hero-link svg {
-            transition: transform .25s ease;
-          }
-
-          .xaaj-about-hero-link:hover svg {
-            transform: translateX(4px);
-          }
-
-          .xaaj-about-hero-number {
-            position: absolute;
-            right: 30px;
-            bottom: 25px;
-            color: rgba(37,35,31,.20);
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: 74px;
-            line-height: 1;
-          }
-
-          .xaaj-about-hero-visual {
-            position: relative;
-            min-height: 720px;
-            overflow: hidden;
-          }
-
-          .xaaj-about-hero-visual img {
-            width: 100%;
-            height: 100%;
-            display: block;
-            object-fit: cover;
-            object-position: center;
-            filter: saturate(.82);
-            transition: transform 1.2s cubic-bezier(.22,1,.36,1);
-          }
-
-          .xaaj-about-hero:hover .xaaj-about-hero-visual img {
-            transform: scale(1.035);
-          }
-
-          .xaaj-about-hero-badge {
-            position: absolute;
-            left: 28px;
-            bottom: 28px;
-            width: 112px;
-            height: 112px;
-            display: grid;
-            place-items: center;
-            border: 1px solid rgba(255,255,255,.58);
-            border-radius: 50%;
-            background: rgba(37,35,31,.78);
-            color: #fff;
-            text-align: center;
-            font-size: 8px;
-            line-height: 1.55;
-            letter-spacing: .14em;
-            text-transform: uppercase;
-            backdrop-filter: blur(7px);
-          }
-
-          .xaaj-about-hero-badge strong {
-            display: block;
-            margin-bottom: 2px;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: 20px;
-            font-weight: 400;
-            letter-spacing: 0;
-          }
-
-          /* ================= INTRO ================= */
-
-          .xaaj-about-intro {
-            width: min(1180px, calc(100% - 42px));
-            margin: 0 auto;
-            padding: 125px 0 118px;
-            display: grid;
-            grid-template-columns: .55fr 1.45fr;
-            gap: 55px;
-          }
-
-          .xaaj-about-section-label {
-            padding-top: 8px;
-            color: var(--accent);
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: .25em;
-            text-transform: uppercase;
-          }
-
-          .xaaj-about-intro h2 {
-            max-width: 870px;
-            margin: 0;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(40px, 5.4vw, 72px);
-            font-weight: 400;
-            line-height: .99;
-            letter-spacing: -.055em;
-          }
-
-          .xaaj-about-intro h2 em {
-            font-style: italic;
-          }
-
-          .xaaj-about-intro-text {
-            max-width: 620px;
-            margin-top: 30px;
-            color: var(--muted);
-            font-size: 15px;
-            line-height: 1.9;
-          }
-
-          .xaaj-about-stat-row {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            margin-top: 52px;
-            border-top: 1px solid var(--line);
-            border-bottom: 1px solid var(--line);
-          }
-
-          .xaaj-about-stat {
-            padding: 24px 22px 25px 0;
-            border-right: 1px solid var(--line);
-          }
-
-          .xaaj-about-stat:not(:first-child) {
-            padding-left: 22px;
-          }
-
-          .xaaj-about-stat:last-child {
-            border-right: 0;
-          }
-
-          .xaaj-about-stat strong {
-            display: block;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: 25px;
-            font-weight: 400;
-          }
-
-          .xaaj-about-stat span {
-            display: block;
-            margin-top: 7px;
-            color: #817a70;
-            font-size: 10px;
-            line-height: 1.55;
-            letter-spacing: .08em;
-            text-transform: uppercase;
-          }
-
-          /* ================= STORY IMAGE STRIP ================= */
-
-          .xaaj-about-story {
-            background: var(--ink);
-            color: #fff;
-            padding: 0;
-          }
-
-          .xaaj-about-story-grid {
-            width: min(1380px, 100%);
-            margin: 0 auto;
-            display: grid;
-            grid-template-columns: 1.08fr .92fr;
-            min-height: 690px;
-          }
-
-          .xaaj-about-story-image {
-            min-height: 690px;
-            overflow: hidden;
-          }
-
-          .xaaj-about-story-image img {
-            width: 100%;
-            height: 100%;
-            display: block;
-            object-fit: cover;
-            filter: saturate(.75);
-          }
-
-          .xaaj-about-story-copy {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            padding: 80px clamp(38px, 7vw, 100px);
-          }
-
-          .xaaj-about-story-copy .xaaj-about-section-label {
-            color: #d58b76;
-          }
-
-          .xaaj-about-story-copy h2 {
-            max-width: 590px;
-            margin: 22px 0 0;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(42px, 5vw, 68px);
-            font-weight: 400;
-            line-height: .98;
-            letter-spacing: -.055em;
-          }
-
-          .xaaj-about-story-copy h2 em {
-            font-style: italic;
-          }
-
-          .xaaj-about-story-copy p {
-            max-width: 530px;
-            margin: 27px 0 0;
-            color: rgba(255,255,255,.61);
-            font-size: 14px;
-            line-height: 1.9;
-          }
-
-          .xaaj-about-story-signature {
-            margin-top: 38px;
-            color: rgba(255,255,255,.38);
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: 22px;
-            font-style: italic;
-          }
-
-          /* ================= VALUES ================= */
-
-          .xaaj-about-values {
-            width: min(1180px, calc(100% - 42px));
-            margin: 0 auto;
-            padding: 125px 0 130px;
-          }
-
-          .xaaj-about-values-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: end;
-            gap: 50px;
-            padding-bottom: 48px;
-            border-bottom: 1px solid var(--line);
-          }
-
-          .xaaj-about-values h2 {
-            max-width: 760px;
-            margin: 18px 0 0;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(43px, 5.5vw, 73px);
-            font-weight: 400;
-            line-height: .97;
-            letter-spacing: -.055em;
-          }
-
-          .xaaj-about-values-head p {
-            max-width: 250px;
-            margin: 0;
-            color: var(--muted);
-            font-size: 12px;
-            line-height: 1.75;
-          }
-
-          .xaaj-about-value-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-          }
-
-          .xaaj-about-value {
-            position: relative;
-            min-height: 280px;
-            padding: 30px 38px 25px 0;
-            border-right: 1px solid var(--line);
-          }
-
-          .xaaj-about-value:not(:first-child) {
-            padding-left: 38px;
-          }
-
-          .xaaj-about-value:last-child {
-            border-right: 0;
-          }
-
-          .xaaj-about-value-number {
-            color: var(--accent);
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: .2em;
-          }
-
-          .xaaj-about-value h3 {
-            margin: 80px 0 11px;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: 27px;
-            font-weight: 400;
-          }
-
-          .xaaj-about-value p {
-            max-width: 270px;
-            margin: 0;
-            color: var(--muted);
-            font-size: 13px;
-            line-height: 1.8;
-          }
-
-          /* ================= CTA ================= */
-
-          .xaaj-about-cta {
-            position: relative;
-            padding: 120px 20px 130px;
-            background: #e8e0d4;
-            text-align: center;
-            overflow: hidden;
-          }
-
-          .xaaj-about-cta::before {
-            content: 'XAAJ';
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -53%);
-            color: rgba(37,35,31,.045);
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(150px, 27vw, 400px);
-            line-height: 1;
-            white-space: nowrap;
-            pointer-events: none;
-          }
-
-          .xaaj-about-cta-inner {
-            position: relative;
-            z-index: 1;
-          }
-
-          .xaaj-about-cta h2 {
-            max-width: 850px;
-            margin: 20px auto 0;
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(48px, 6.3vw, 84px);
-            font-weight: 400;
-            line-height: .94;
-            letter-spacing: -.06em;
-          }
-
-          .xaaj-about-cta h2 em {
-            color: var(--accent);
-            font-style: italic;
-          }
-
-          .xaaj-about-cta p {
-            max-width: 500px;
-            margin: 25px auto 0;
-            color: var(--muted);
-            font-size: 13px;
-            line-height: 1.8;
-          }
-
-          .xaaj-about-cta-links {
-            display: flex;
-            justify-content: center;
-            flex-wrap: wrap;
-            gap: 9px;
-            margin-top: 34px;
-          }
-
-          .xaaj-about-cta-links a {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 46px;
-            padding: 0 20px;
-            border: 1px solid rgba(37,35,31,.22);
-            border-radius: 999px;
-            color: var(--ink);
-            text-decoration: none;
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: .08em;
-            text-transform: uppercase;
-            transition: .25s ease;
-          }
-
-          .xaaj-about-cta-links a:hover {
-            background: var(--ink);
-            border-color: var(--ink);
-            color: #fff;
-            transform: translateY(-2px);
-          }
-
-          /* ================= MOBILE ================= */
-
-          @media (max-width: 800px) {
-            .xaaj-about-hero {
-              width: calc(100% - 20px);
-              margin-top: 10px;
-              min-height: auto;
-              grid-template-columns: 1fr;
-            }
-
-            .xaaj-about-hero-copy {
-              min-height: 520px;
-              padding: 65px 28px 55px;
-            }
-
-            .xaaj-about-hero h1 {
-              font-size: clamp(51px, 15vw, 70px);
-            }
-
-            .xaaj-about-hero-visual {
-              min-height: 430px;
-            }
-
-            .xaaj-about-hero-badge {
-              left: 20px;
-              bottom: 20px;
-            }
-
-            .xaaj-about-intro {
-              width: calc(100% - 30px);
-              padding: 78px 0 75px;
-              grid-template-columns: 1fr;
-              gap: 28px;
-            }
-
-            .xaaj-about-intro h2 {
-              font-size: clamp(40px, 12vw, 55px);
-            }
-
-            .xaaj-about-stat-row {
-              grid-template-columns: 1fr;
-            }
-
-            .xaaj-about-stat,
-            .xaaj-about-stat:not(:first-child) {
-              padding: 20px 0;
-              border-right: 0;
-              border-bottom: 1px solid var(--line);
-            }
-
-            .xaaj-about-stat:last-child {
-              border-bottom: 0;
-            }
-
-            .xaaj-about-story-grid {
-              grid-template-columns: 1fr;
-            }
-
-            .xaaj-about-story-image {
-              min-height: 480px;
-            }
-
-            .xaaj-about-story-copy {
-              min-height: 560px;
-              padding: 72px 28px;
-            }
-
-            .xaaj-about-story-copy h2 {
-              font-size: clamp(42px, 12vw, 56px);
-            }
-
-            .xaaj-about-values {
-              width: calc(100% - 30px);
-              padding: 78px 0 82px;
-            }
-
-            .xaaj-about-values-head {
-              display: block;
-            }
-
-            .xaaj-about-values-head p {
-              margin-top: 25px;
-            }
-
-            .xaaj-about-value-grid {
-              grid-template-columns: 1fr;
-            }
-
-            .xaaj-about-value,
-            .xaaj-about-value:not(:first-child) {
-              min-height: auto;
-              padding: 27px 0 32px;
-              border-right: 0;
-              border-bottom: 1px solid var(--line);
-            }
-
-            .xaaj-about-value:last-child {
-              border-bottom: 0;
-            }
-
-            .xaaj-about-value h3 {
-              margin-top: 35px;
-            }
-
-            .xaaj-about-cta {
-              padding: 82px 18px 90px;
-            }
-          }
-        `}</style>
-
-        <main className="xaaj-about">
-
-          {/* HERO */}
-          <section className="xaaj-about-hero">
-
-            <div className="xaaj-about-hero-copy">
-              <span className="xaaj-about-eyebrow">
-                The XAAJ story
-              </span>
-
-              <h1>
-                Everyday
-                <br />
-                objects,
-                <br />
-                <em>beautifully lived.</em>
-              </h1>
-
-              <p className="xaaj-about-hero-description">
-                We believe the objects around your table should
-                bring a little more warmth to ordinary moments.
-                XAAJ creates thoughtful crockery for the way
-                people actually live, gather and celebrate.
-              </p>
-
-              <Link className="xaaj-about-hero-link" to="/shop">
-                Explore the collection
-                <ArrowRight size={14} />
-              </Link>
-
-              <span className="xaaj-about-hero-number">
-                01
-              </span>
-            </div>
-
-            <div className="xaaj-about-hero-visual">
-              <img
-                src={heroImage}
-                alt="XAAJ tableware arranged on a warm dining table"
-              />
-
-              <div className="xaaj-about-hero-badge">
-                <div>
-                  <strong>XAAJ</strong>
-                  Made for
-                  <br />
-                  everyday rituals
-                </div>
-              </div>
-            </div>
-
-          </section>
-
-          {/* PHILOSOPHY */}
-          <section className="xaaj-about-intro">
-
-            <div className="xaaj-about-section-label">
-              02 — Our philosophy
-            </div>
-
-            <div>
-              <h2>
-                The everyday deserves
-                <em> beautiful things.</em>
-              </h2>
-
-              <p className="xaaj-about-intro-text">
-                XAAJ began with a simple idea: beauty should not
-                be reserved for special occasions. From the first
-                cup of tea in the morning to a table shared with
-                people you love, the pieces we use every day
-                can make ordinary rituals feel meaningful.
-              </p>
-
-              <div className="xaaj-about-stat-row">
-
-                <div className="xaaj-about-stat">
-                  <strong>01</strong>
-                  <span>Thoughtful design</span>
-                </div>
-
-                <div className="xaaj-about-stat">
-                  <strong>02</strong>
-                  <span>Indian craft</span>
-                </div>
-
-                <div className="xaaj-about-stat">
-                  <strong>03</strong>
-                  <span>Made to be lived with</span>
-                </div>
-
-              </div>
-            </div>
-
-          </section>
-
-          {/* STORY */}
-          <section className="xaaj-about-story">
-
-            <div className="xaaj-about-story-grid">
-
-              <div className="xaaj-about-story-image">
-                <img
-                  src={tableImage}
-                  alt="Warm table setting with handcrafted crockery"
-                />
-              </div>
-
-              <div className="xaaj-about-story-copy">
-
-                <span className="xaaj-about-section-label">
-                  03 — The XAAJ way
-                </span>
-
-                <h2>
-                  For morning tea,
-                  <br />
-                  long lunches &
-                  <br />
-                  <em>everything between.</em>
-                </h2>
-
-                <p>
-                  We work with makers and draw inspiration from
-                  the textures, colours and quiet character of
-                  Indian craft. Our collections are designed
-                  to feel contemporary while still carrying
-                  a sense of warmth and familiarity.
-                </p>
-
-                <p>
-                  Small variations in colour, texture and form
-                  are part of the charm. They are little reminders
-                  that the objects on your table have a human story.
-                </p>
-
-                <div className="xaaj-about-story-signature">
-                  — with care, XAAJ
-                </div>
-
-              </div>
-
-            </div>
-
-          </section>
-
-          {/* VALUES */}
-          <section className="xaaj-about-values">
-
-            <div className="xaaj-about-values-head">
-
-              <div>
-                <span className="xaaj-about-section-label">
-                  04 — What we believe
-                </span>
-
-                <h2>
-                  Less clutter.
-                  <br />
-                  More <em>meaning.</em>
-                </h2>
-              </div>
-
-              <p>
-                Every collection starts with the same question:
-                will this make the everyday table feel a little
-                more special?
-              </p>
-
-            </div>
-
-            <div className="xaaj-about-value-grid">
-
-              <div className="xaaj-about-value">
-                <span className="xaaj-about-value-number">
-                  01
-                </span>
-
-                <h3>
-                  Craft over clutter
-                </h3>
-
-                <p>
-                  Thoughtful pieces that earn their place
-                  at your table.
-                </p>
-              </div>
-
-              <div className="xaaj-about-value">
-                <span className="xaaj-about-value-number">
-                  02
-                </span>
-
-                <h3>
-                  Beauty with purpose
-                </h3>
-
-                <p>
-                  Form, texture and function working together
-                  naturally.
-                </p>
-              </div>
-
-              <div className="xaaj-about-value">
-                <span className="xaaj-about-value-number">
-                  03
-                </span>
-
-                <h3>
-                  Made to keep
-                </h3>
-
-                <p>
-                  Objects you reach for often, share freely
-                  and enjoy for years.
-                </p>
-              </div>
-
-            </div>
-
-          </section>
-
-          {/* CTA */}
-          <section className="xaaj-about-cta">
-
-            <div className="xaaj-about-cta-inner">
-
-              <span className="xaaj-about-section-label">
-                05 — Come say hello
-              </span>
-
-              <h2>
-                Your table tells a story.
-                <br />
-                <em>Make it yours.</em>
-              </h2>
-
-              <p>
-                Questions about an order, a product or simply
-                want to say hello? Our team is always happy to help.
-              </p>
-
-              <div className="xaaj-about-cta-links">
-
-                <a href="mailto:customercare@xaaj.in">
-                  Email us
-                </a>
-
-                <a href="tel:+919899446117">
-                  +91 9899446117
-                </a>
-
-                <Link to="/contact">
-                  Contact us
-                  <ArrowRight
-                    size={13}
-                    style={{ marginLeft: 7 }}
-                  />
-                </Link>
-
-              </div>
-
-            </div>
-
-          </section>
-
-        </main>
-
-        <Newsletter />
-        <Footer />
-      </>
+      <main
+        aria-label="Access denied"
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          padding: '24px',
+          background: '#f7f4ee',
+          color: '#29251f',
+          fontFamily: 'Georgia, "Times New Roman", serif'
+        }}
+      >
+        <h1
+          style={{
+            margin: 0,
+            fontSize: 'clamp(28px, 4vw, 42px)',
+            fontWeight: 400,
+            letterSpacing: '.02em'
+          }}
+        >
+          Admin Denied
+        </h1>
+      </main>
     )
   }
-
 
   // ==========================================================
   // CHECKOUT
@@ -8533,7 +8192,7 @@ if (path === '/account') {
 
 
 // Woodistry styles are embedded here so App.jsx is self-contained.
-const WOODISTRY_CSS = "@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600&display=swap');\n\n:root{--wood-paper:#f5f2ec;--wood-white:#fbf9f5;--wood-ink:#292823;--wood-muted:#716b62;--wood-line:#ded8ce;--wood-serif:'Playfair Display',Georgia,serif;--wood-sans:'DM Sans',Arial,sans-serif}\nbody{font-family:var(--wood-sans);color:var(--wood-ink);background:var(--wood-paper)}\n.wood-announcement{height:35px;background:#292821;color:#f8f5ef;display:flex;align-items:center;justify-content:center;gap:13px;padding:0 5.8%;font-size:10px;letter-spacing:.01em;position:relative;z-index:1001}\n.wood-announcement i{height:13px;width:1px;background:#827e74}.wood-announcement-right{position:absolute;right:5.8%;display:flex;gap:28px;color:#d4d0c8}\n.wood-header{height:63px;background:#fbf9f5;border-bottom:1px solid #e4dfd7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 5.8%;position:sticky;top:0;z-index:1000;color:var(--wood-ink)}\n.wood-wordmark{justify-self:start;display:flex;align-items:center;justify-content:flex-start;text-decoration:none!important;color:var(--wood-ink)!important;width:clamp(150px,17vw,245px);height:54px;white-space:nowrap;overflow:hidden}.wood-wordmark img{display:block;max-width:100%;width:100%;height:100%;object-fit:contain;object-position:left center}.wood-wordmark-text{display:none;font-size:22px;letter-spacing:.23em;font-weight:500;white-space:nowrap}\n.wood-nav{display:flex;align-items:center;gap:clamp(17px,2.2vw,36px);height:100%}.wood-nav>a{height:100%;display:flex;align-items:center;gap:5px;text-decoration:none;color:var(--wood-ink);font-size:12px;white-space:nowrap;transition:opacity .2s}.wood-nav>a:hover{opacity:.58}\n.wood-header-actions{justify-self:end;display:flex;align-items:center;gap:18px}.wood-header-actions button,.wood-mobile-menu{border:0;background:transparent;color:inherit;padding:3px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.wood-header-actions button:hover{opacity:.6}.wood-action-search{gap:8px!important;font-size:12px}.wood-bag{position:relative}.wood-bag b{position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;border-radius:50%;background:#292823;color:#fff;font-size:9px;font-weight:500;display:grid;place-items:center}.wood-mobile-menu{display:none}\n.wood-mega-menu{position:absolute;top:100%;left:0;width:100%;min-height:280px;background:#f8f5ef;box-shadow:0 18px 32px #211e1714;border-top:1px solid #e9e3da;display:grid;grid-template-columns:.8fr 1fr 1fr;gap:38px;padding:38px 12.2% 36px;z-index:1005}.wood-mega-links{display:flex;flex-direction:column;align-items:flex-start;gap:15px}.wood-mega-links>a{font-size:12px;text-decoration:none;color:var(--wood-ink);text-transform:uppercase;letter-spacing:.07em}.wood-kicker{display:block;font-size:10px;line-height:1.4;letter-spacing:.22em;text-transform:uppercase;font-weight:700;color:#756e62}.wood-mega-feature{display:grid;grid-template-columns:42% 1fr;gap:16px;align-items:center;text-decoration:none;color:var(--wood-ink);min-width:0}.wood-mega-feature img{width:100%;height:126px;object-fit:cover}.wood-mega-feature span{display:flex;flex-direction:column;align-items:flex-start;gap:8px}.wood-mega-feature small{font-size:9px;letter-spacing:.16em}.wood-mega-feature strong{font:500 22px/1.1 var(--wood-serif)}.wood-mega-feature em{font-size:11px;font-style:normal}.wood-mega-close{position:absolute;top:20px;right:5.8%;border:0;background:none;cursor:pointer}\n.wood-search-panel{position:sticky;top:63px;z-index:999;background:#fbf9f5;padding:18px 6%;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--wood-line)}.wood-search-panel input{flex:1;border:0;border-bottom:1px solid var(--wood-line);background:transparent;padding:12px 4px;font:14px var(--wood-sans);outline:none}.wood-search-panel button{display:flex;align-items:center;gap:8px;border:0;background:transparent;cursor:pointer;font-size:12px}\n.wood-home{background:var(--wood-paper);overflow:hidden}.wood-hero{height:440px;min-height:0;position:relative;overflow:hidden;background:#777064;color:#fff}.wood-hero-media,.wood-hero-shade{position:absolute;inset:0}.wood-hero-media img,.wood-hero-media video{position:absolute;width:100%;height:100%;inset:0;object-fit:cover;opacity:0;transition:opacity .9s ease;display:block}.wood-hero-media img.is-active,.wood-hero-media video.is-active{opacity:1}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.68) 0%,rgba(25,23,19,.43) 32%,rgba(25,23,19,.08) 70%,rgba(25,23,19,0) 100%)}.wood-hero-copy{position:absolute;top:50%;left:9.6%;transform:translateY(-51%);max-width:540px}.wood-hero-copy .wood-kicker{color:#fff;font-size:10px;letter-spacing:.24em;margin-bottom:17px}.wood-hero-copy h1{font:400 clamp(54px,5.1vw,78px)/.96 var(--wood-serif);letter-spacing:-.055em;margin:0 0 24px;color:#fff}.wood-hero-copy p{font-size:15px;line-height:1.75;margin:0 0 23px;color:#f4f0e9}.wood-primary-button{display:inline-flex;align-items:center;gap:26px;padding:16px 19px;background:#fbf9f5;color:#292823;text-decoration:none;font-size:12px;min-height:48px;transition:background .25s,color .25s}.wood-primary-button:hover{background:#292823;color:#fff}.wood-hero-pagination{position:absolute;left:9.6%;right:9.6%;bottom:22px;display:flex;align-items:center;justify-content:space-between}.wood-hero-numbers{display:flex;align-items:center;gap:24px}.wood-hero-numbers button{border:0;background:transparent;color:#fff;padding:4px 0;font:11px var(--wood-sans);cursor:pointer;opacity:.72;position:relative}.wood-hero-numbers button.active{opacity:1}.wood-hero-numbers button.active:after{content:'';position:absolute;left:29px;top:50%;width:24px;height:1px;background:#fff}.wood-hero-arrows{display:flex;gap:8px}.wood-hero-arrows button{width:40px;height:40px;border:1px solid #ffffff9c;border-radius:50%;color:#fff;background:transparent;font-size:19px;cursor:pointer;transition:background .2s}.wood-hero-arrows button:hover{background:#ffffff2b}\n.wood-space-section{padding:20px 5.8% 64px;display:grid;grid-template-columns:clamp(205px,14.2vw,290px) minmax(0,1fr);gap:40px;align-items:center;min-width:0}.wood-section-intro{min-width:0;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;padding-block:2px;margin-top:0}.wood-section-intro h2,.wood-products-intro h2,.wood-mobile-section-heading h2{font:500 32px/1.12 var(--wood-serif);letter-spacing:-.04em;margin:0 0 13px}.wood-section-intro p,.wood-products-intro p{font-size:13px;line-height:1.65;color:var(--wood-muted);margin:0 0 22px}.wood-section-intro>a,.wood-products-intro>a,.wood-mobile-section-heading>a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--wood-ink);font-size:11px;border-bottom:1px solid #777064;padding-bottom:6px}.wood-space-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.wood-space-card{height:clamp(190px,13.8vw,285px);position:relative;overflow:hidden;display:block;background:#d5cec2;color:#fff;text-decoration:none}.wood-space-card:after{content:'';position:absolute;inset:30% 0 0;background:linear-gradient(transparent,rgba(22,20,17,.58))}.wood-space-card img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s cubic-bezier(.2,.7,.2,1)}.wood-space-card:hover img{transform:scale(1.045)}.wood-space-card>span{position:absolute;z-index:1;left:16px;bottom:16px;display:flex;align-items:center;gap:7px;font:500 clamp(18px,1.65vw,25px)/1 var(--wood-serif);color:#fff}.wood-space-card>span svg{stroke-width:1.5}\n.wood-products-section{padding:5px 5.8% 82px;display:grid;grid-template-columns:205px minmax(0,1fr);gap:40px}.wood-products-intro{padding-top:4px}.wood-products-content{min-width:0}.wood-product-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px 16px;align-items:start}.wood-product-grid .product-card{min-width:0;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible;display:flex;flex-direction:column}.wood-product-grid .product-image{position:relative;aspect-ratio: .78 / 1;overflow:hidden;background:#e4dfd7;border-radius:0;margin:0}.wood-product-grid .product-image-link{display:block;width:100%;height:100%;position:absolute;inset:0}.wood-product-grid .product-image-primary,.wood-product-grid .product-image-secondary{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .45s ease,transform .7s ease}.wood-product-grid .product-image-primary{position:relative}.wood-product-grid .product-image-secondary{position:absolute;inset:0;opacity:0}.wood-product-grid .product-card:hover .product-image-primary{transform:scale(1.025)}.wood-product-grid .product-card:hover .product-image-secondary{opacity:1}.wood-product-grid .heart{position:absolute;top:12px;right:12px;width:30px;height:30px;border:0;background:transparent;color:#292823;padding:4px;z-index:2}.wood-product-grid .heart svg{width:20px;height:20px}.wood-product-grid .heart-tooltip{display:none}.wood-product-grid .product-image-bottom-spacer{display:none}.wood-product-grid .product-copy{padding:11px 0 0;display:flex;flex-direction:column;gap:4px}.wood-product-grid .product-meta{display:none}.wood-product-grid .product-title-link{text-decoration:none;color:var(--wood-ink)}.wood-product-grid .product-title-link h3{font:400 13px/1.4 var(--wood-sans);margin:0;color:var(--wood-ink)}.wood-product-grid .product-description{font-size:11px;line-height:1.4;color:#827b70;margin:0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.wood-product-grid .rating{display:none}.wood-product-grid .product-bottom-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:1px}.wood-product-grid .price{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.wood-product-grid .price strong{font-size:12px;font-weight:500;color:var(--wood-ink)}.wood-product-grid .price del,.wood-product-grid .save-badge{display:none}.wood-product-grid .add{border:1px solid #d4cec4;background:transparent;color:var(--wood-ink);border-radius:0;min-height:30px;padding:5px 8px;font-size:10px;opacity:0;transition:opacity .2s,background .2s;white-space:nowrap}.wood-product-grid .product-card:hover .add,.wood-product-grid .add:focus{opacity:1}.wood-product-grid .add:hover{background:var(--wood-ink);color:#fff}.wood-product-grid .add-label{font-size:10px}.wood-product-grid .add-icon,.wood-product-grid .add-shine{display:none}.wood-empty-products{grid-column:1/-1;color:var(--wood-muted);font-size:13px;padding:35px 0}.wood-mobile-section-heading{display:none}\n.wood-editorial{display:grid;grid-template-columns:.78fr 1.22fr;min-height:470px;background:#e9e3d9}.wood-editorial-copy{padding:70px clamp(30px,8vw,120px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center}.wood-editorial-copy h2{font:400 clamp(42px,4.5vw,65px)/1.02 var(--wood-serif);letter-spacing:-.05em;margin:18px 0 20px}.wood-editorial-copy h2 em{font-weight:400;color:#8d6f54}.wood-editorial-copy p{max-width:390px;font-size:13px;line-height:1.85;color:#716b62;margin:0 0 24px}.wood-outline-button{display:inline-flex;align-items:center;gap:18px;padding:13px 17px;border:1px solid #a9a094;color:var(--wood-ink);text-decoration:none;font-size:11px}.wood-outline-button:hover{background:#292823;color:#fff;border-color:#292823}.wood-editorial-image{min-height:420px;overflow:hidden}.wood-editorial-image img{width:100%;height:100%;object-fit:cover;display:block}.wood-service-strip{padding:30px 5.8%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;border-bottom:1px solid var(--wood-line)}.wood-service-strip>div{display:flex;align-items:center;justify-content:center;gap:13px}.wood-service-strip svg{flex-shrink:0;stroke-width:1.25}.wood-service-strip span{display:flex;flex-direction:column;gap:4px}.wood-service-strip strong{font-size:11px;font-weight:600}.wood-service-strip small{font-size:10px;color:var(--wood-muted)}\n/* Footer keeps the original links and newsletter integrations, with the new visual language. */\n.footer{background:#292823!important;color:#f6f2ea!important;padding-top:54px!important}.footer .footer-main{max-width:none!important;padding-left:5.8%!important;padding-right:5.8%!important}.footer .wood-footer-wordmark{display:flex!important;flex-direction:column;align-items:flex-start;gap:12px;text-decoration:none!important;color:#f6f2ea!important}.footer .wood-footer-wordmark span{font-size:21px;letter-spacing:.2em;font-weight:500}.footer .footer-main h4{font-size:11px!important;letter-spacing:.14em;text-transform:uppercase}.footer a{color:inherit}.footer .footer-bottom{padding-left:5.8%!important;padding-right:5.8%!important}\n/* Reuse the existing newsletter and content pages without changing their data flow. */\n.newsletter{background:#e9e3d9!important;color:var(--wood-ink)!important}.newsletter .eyebrow{color:#796d5d!important}.newsletter h2{font-family:var(--wood-serif)!important}.newsletter form input{border-radius:0!important}.newsletter form button{border-radius:0!important}\n@media(max-width:1100px){.wood-header{padding:0 3.5%}.wood-wordmark{font-size:19px;letter-spacing:.18em}.wood-wordmark-text{font-size:19px;letter-spacing:.18em}.wood-nav{gap:14px}.wood-nav>a{font-size:11px}.wood-header-actions{gap:12px}.wood-space-section,.wood-products-section{padding-left:4%;padding-right:4%;grid-template-columns:170px minmax(0,1fr);gap:25px}.wood-product-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.wood-product-grid .product-card:nth-child(n+5){display:none}.wood-announcement-right{right:3.5%}}\n@media(max-width:780px){.wood-announcement{height:32px;font-size:9px;padding:0 12px;gap:8px}.wood-announcement-right{display:none}.wood-header{height:62px;padding:0 18px;grid-template-columns:36px 1fr auto;gap:10px}.wood-mobile-menu{display:inline-flex;justify-self:start}.wood-wordmark{justify-self:center;width:clamp(120px,38vw,170px);font-size:18px;letter-spacing:.18em}.wood-wordmark img{object-position:center}.wood-wordmark-text{font-size:18px;letter-spacing:.18em}.wood-nav{display:none;position:absolute;top:100%;left:0;right:0;height:auto;background:#fbf9f5;padding:12px 22px 24px;box-shadow:0 16px 20px #211e1714;align-items:stretch;flex-direction:column;gap:0}.wood-nav.is-open{display:flex}.wood-nav>a{min-height:47px;border-bottom:1px solid #e9e3da;justify-content:space-between;font-size:13px}.wood-header-actions{gap:11px}.wood-action-search span{display:none}.wood-header-actions button svg{width:19px;height:19px}.wood-header-actions button:first-child{display:inline-flex}.wood-header-actions button:nth-child(2){display:none}.wood-bag b{top:-6px;right:-6px}.wood-mega-menu{display:none}.wood-search-panel{top:62px;padding:12px 18px;gap:10px}.wood-search-panel input{min-width:0}.wood-hero{height:615px;min-height:0;max-height:none}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.62),rgba(25,23,19,.12)),linear-gradient(0deg,rgba(25,23,19,.28),transparent 50%)}.wood-hero-copy{left:7%;right:6%;top:49%;max-width:460px}.wood-hero-copy h1{font-size:clamp(52px,12vw,72px)}.wood-hero-copy p{font-size:13px}.wood-hero-pagination{left:7%;right:7%;bottom:18px}.wood-space-section{padding:42px 18px 48px;display:block}.wood-section-intro{display:grid;grid-template-columns:1fr auto;align-items:end;margin-bottom:20px}.wood-section-intro h2{font-size:29px;margin:0}.wood-section-intro p{grid-column:1;grid-row:2;margin:8px 0 0;font-size:12px}.wood-section-intro>a{grid-column:2;grid-row:1/3;align-self:end}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.wood-space-card{height:clamp(175px,51vw,260px)}.wood-space-card>span{left:12px;bottom:13px;font-size:21px}.wood-products-section{padding:5px 18px 55px;display:block}.wood-products-intro{display:none}.wood-mobile-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.wood-mobile-section-heading h2{font-size:29px;margin:0}.wood-mobile-section-heading>a{font-size:11px}.wood-product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 12px}.wood-product-grid .product-card:nth-child(n+5){display:flex}.wood-product-grid .product-image{aspect-ratio:.79/1}.wood-product-grid .product-copy{padding-top:9px}.wood-product-grid .product-title-link h3{font-size:12px}.wood-product-grid .product-description{font-size:10px}.wood-product-grid .price strong{font-size:12px}.wood-product-grid .add{opacity:1;padding:5px 6px;min-height:27px}.wood-product-grid .add-label{font-size:9px}.wood-product-grid .heart{top:8px;right:8px}.wood-editorial{grid-template-columns:1fr}.wood-editorial-copy{padding:48px 24px 42px;order:2}.wood-editorial-copy h2{font-size:48px}.wood-editorial-image{min-height:290px;height:65vw;order:1}.wood-service-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:23px 12px;padding:25px 18px}.wood-service-strip>div{justify-content:flex-start;gap:10px}.wood-service-strip svg{width:20px}.wood-service-strip strong{font-size:10px}.wood-service-strip small{font-size:9px}.footer .footer-main{padding-left:22px!important;padding-right:22px!important}.footer .footer-bottom{padding-left:22px!important;padding-right:22px!important}.footer .wood-footer-wordmark span{font-size:18px}}\n@media(max-width:390px){.wood-wordmark{font-size:15px;letter-spacing:.16em}.wood-wordmark-text{font-size:15px;letter-spacing:.16em}.wood-header-actions{gap:8px}.wood-header-actions button svg{width:18px;height:18px}.wood-hero{height:540px}.wood-hero-copy h1{font-size:49px}.wood-space-card>span{font-size:18px}.wood-product-grid .product-bottom-row{align-items:flex-start;flex-direction:column}.wood-product-grid .add{width:100%}.wood-service-strip{grid-template-columns:1fr 1fr}}\n.wood-demo-product{min-width:0;display:flex;flex-direction:column;align-items:stretch}.wood-demo-image{aspect-ratio:.78/1;position:relative;display:block;overflow:hidden;background:#e4dfd7;color:var(--wood-ink)}.wood-demo-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s ease}.wood-demo-product:hover .wood-demo-image img{transform:scale(1.035)}.wood-demo-heart{position:absolute;right:12px;top:12px}.wood-demo-quick{position:absolute;bottom:0;left:0;right:0;padding:11px 6px;text-align:center;background:#fbf9f5eF;color:var(--wood-ink);font-size:11px;transform:translateY(100%);transition:transform .25s}.wood-demo-product:hover .wood-demo-quick{transform:translateY(0)}.wood-demo-name{margin-top:11px;font-size:13px;line-height:1.4;text-decoration:none;color:var(--wood-ink)}.wood-demo-product p{margin:3px 0 5px;font-size:11px;color:#827b70}.wood-demo-product>strong{font-size:12px;font-weight:500}@media(max-width:780px){.wood-demo-heart{top:8px;right:8px}.wood-demo-name{font-size:12px}.wood-demo-quick{transform:none;font-size:10px;padding:8px 4px}}\n@media(min-width:781px){.wood-hero{height:440px;min-height:0}.wood-space-section{padding-top:24px}.wood-section-intro{overflow:visible;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;margin:0 0 13px;padding:2px 0}}\n/* Homepage Best Sellers: clean editorial product layout matching the Oak Lounge reference. */\n.wood-product-grid .wood-home-product{min-width:0;display:flex;flex-direction:column;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible}\n/* Best Sellers image ratio matches reference: 206 x 265 */.wood-product-grid .wood-home-product-image{position:relative;width:100%;aspect-ratio:206/265;height:auto;min-height:0;overflow:hidden;background:#e4dfd7;border-radius:0}\n.wood-product-grid .wood-home-product-image>a{position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden}\n.wood-product-grid .wood-home-product-image img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .65s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-image img{transform:scale(1.045)}\n.wood-product-grid .wood-home-product-quick{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 8px;background:rgba(251,249,245,.94);color:var(--wood-ink);font-size:12px;letter-spacing:.01em;transform:translateY(101%);opacity:0;transition:transform .28s ease,opacity .28s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-quick,.wood-product-grid .wood-home-product:focus-within .wood-home-product-quick{transform:translateY(0);opacity:1}\n.wood-product-grid .wood-home-product-image-link:focus-visible{outline:2px solid var(--wood-ink);outline-offset:-3px}\n.wood-product-grid .wood-home-product-heart{position:absolute;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:0;background:transparent;color:#292823;cursor:pointer}\n.wood-product-grid .wood-home-product-details{padding:11px 0 0;min-width:0}\n.wood-product-grid .wood-home-product-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}\n.wood-product-grid .wood-home-product-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;color:var(--wood-ink);font-size:13px;line-height:1.4}\n.wood-product-grid .wood-home-product-price{flex-shrink:0;color:var(--wood-ink);font-size:12px;font-weight:500;white-space:nowrap}\n.wood-product-grid .wood-home-product-material{margin:7px 0 0;color:#827b70;font-size:11px;line-height:1.4}\n@media(max-width:780px){.wood-product-grid .wood-home-product-image{aspect-ratio:.78/1}.wood-product-grid .wood-home-product-heart{top:8px;right:8px}.wood-product-grid .wood-home-product-name{font-size:12px}.wood-product-grid .wood-home-product-price{font-size:12px}.wood-product-grid .wood-home-product-material{font-size:10px;margin-top:5px}.wood-product-grid .wood-home-product-title-row{gap:5px}}\n\n\n\n/* WOODISTRY SHOP COLLECTION */\n.wood-shop-page .breadcrumbs a{color:inherit;text-decoration:none}\n.wood-shop-title{align-items:flex-end;gap:32px}\n.wood-shop-title h1{max-width:900px}\n.wood-shop-title p{max-width:620px}\n.wood-shop-sort-label select{min-width:170px}\n.wood-shop-filters{display:flex;gap:30px;align-items:center;overflow-x:auto;white-space:nowrap;scrollbar-width:none}\n.wood-shop-filters::-webkit-scrollbar{display:none}\n.wood-shop-filters a{flex:0 0 auto;text-decoration:none}\n.wood-shop-filters a.active{color:#292824;border-bottom-color:#292824}\n.wood-shop-result-count{margin:22px 0 18px;color:#777167;font-size:12px;letter-spacing:.04em}\n.wood-shop-grid{align-items:start}\n.wood-shop-empty{grid-column:1/-1;min-height:300px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:48px 0 64px;border-top:1px solid #e5dfd5}\n.wood-shop-empty h2{margin:12px 0;font-family:Georgia,\"Times New Roman\",serif;font-size:clamp(28px,3vw,42px);font-weight:400;line-height:1.12;color:#292824}\n.wood-shop-empty p{max-width:470px;margin:0;color:#777167;font-size:15px;line-height:1.8}\n.wood-shop-reset{display:inline-flex;align-items:center;gap:12px;margin-top:24px;padding:13px 0;border-bottom:1px solid #292824;color:#292824;text-decoration:none;font-size:13px}\n.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}\n@media(max-width:780px){.wood-shop-title{align-items:flex-start;flex-direction:column;gap:20px}.wood-shop-title h1{font-size:clamp(42px,11vw,64px)}.wood-shop-filters{gap:22px}.wood-shop-empty{min-height:240px;padding:34px 0 48px}.wood-shop-result-count{margin:18px 0 14px}}"
+const WOODISTRY_CSS = "@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600&display=swap');\n\n:root{--wood-paper:#f5f2ec;--wood-white:#fbf9f5;--wood-ink:#292823;--wood-muted:#716b62;--wood-line:#ded8ce;--wood-serif:'Playfair Display',Georgia,serif;--wood-sans:'DM Sans',Arial,sans-serif}\nbody{font-family:var(--wood-sans);color:var(--wood-ink);background:var(--wood-paper)}\n.wood-announcement{height:35px;background:#292821;color:#f8f5ef;display:flex;align-items:center;justify-content:center;gap:13px;padding:0 5.8%;font-size:10px;letter-spacing:.01em;position:relative;z-index:1001}\n.wood-announcement i{height:13px;width:1px;background:#827e74}.wood-announcement-right{position:absolute;right:5.8%;display:flex;gap:28px;color:#d4d0c8}\n.wood-header{height:63px;background:#fbf9f5;border-bottom:1px solid #e4dfd7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 5.8%;position:sticky;top:0;z-index:1000;color:var(--wood-ink)}\n.wood-wordmark{justify-self:start;display:flex;align-items:center;justify-content:flex-start;text-decoration:none!important;color:var(--wood-ink)!important;width:clamp(150px,17vw,245px);height:54px;white-space:nowrap;overflow:hidden}.wood-wordmark img{display:block;max-width:100%;width:100%;height:100%;object-fit:contain;object-position:left center}.wood-wordmark-text{display:none;font-size:22px;letter-spacing:.23em;font-weight:500;white-space:nowrap}\n.wood-nav{display:flex;align-items:center;gap:clamp(17px,2.2vw,36px);height:100%}.wood-nav>a{height:100%;display:flex;align-items:center;gap:5px;text-decoration:none;color:var(--wood-ink);font-size:12px;white-space:nowrap;transition:opacity .2s}.wood-nav>a:hover{opacity:.58}\n.wood-header-actions{justify-self:end;display:flex;align-items:center;gap:18px}.wood-header-actions button,.wood-mobile-menu{border:0;background:transparent;color:inherit;padding:3px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.wood-header-actions button:hover{opacity:.6}.wood-action-search{gap:8px!important;font-size:12px}.wood-bag{position:relative}.wood-bag b{position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;border-radius:50%;background:#292823;color:#fff;font-size:9px;font-weight:500;display:grid;place-items:center}.wood-mobile-menu{display:none}\n.wood-mega-menu{position:absolute;top:100%;left:0;width:100%;min-height:280px;background:#f8f5ef;box-shadow:0 18px 32px #211e1714;border-top:1px solid #e9e3da;display:grid;grid-template-columns:.8fr 1fr 1fr;gap:38px;padding:38px 12.2% 36px;z-index:1005}.wood-mega-links{display:flex;flex-direction:column;align-items:flex-start;gap:15px}.wood-mega-links>a{font-size:12px;text-decoration:none;color:var(--wood-ink);text-transform:uppercase;letter-spacing:.07em}.wood-kicker{display:block;font-size:10px;line-height:1.4;letter-spacing:.22em;text-transform:uppercase;font-weight:700;color:#756e62}.wood-mega-feature{display:grid;grid-template-columns:42% 1fr;gap:16px;align-items:center;text-decoration:none;color:var(--wood-ink);min-width:0}.wood-mega-feature img{width:100%;height:126px;object-fit:cover}.wood-mega-feature span{display:flex;flex-direction:column;align-items:flex-start;gap:8px}.wood-mega-feature small{font-size:9px;letter-spacing:.16em}.wood-mega-feature strong{font:500 22px/1.1 var(--wood-serif)}.wood-mega-feature em{font-size:11px;font-style:normal}.wood-mega-close{position:absolute;top:20px;right:5.8%;border:0;background:none;cursor:pointer}\n.wood-search-panel{position:sticky;top:63px;z-index:999;background:#fbf9f5;padding:18px 6%;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--wood-line)}.wood-search-panel input{flex:1;border:0;border-bottom:1px solid var(--wood-line);background:transparent;padding:12px 4px;font:14px var(--wood-sans);outline:none}.wood-search-panel button{display:flex;align-items:center;gap:8px;border:0;background:transparent;cursor:pointer;font-size:12px}\n.wood-home{background:var(--wood-paper);overflow:hidden}.wood-hero{height:440px;min-height:0;position:relative;overflow:hidden;background:#777064;color:#fff}.wood-hero-media,.wood-hero-shade{position:absolute;inset:0}.wood-hero-media img,.wood-hero-media video{position:absolute;width:100%;height:100%;inset:0;object-fit:cover;opacity:0;transition:opacity .9s ease;display:block}.wood-hero-media img.is-active,.wood-hero-media video.is-active{opacity:1}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.68) 0%,rgba(25,23,19,.43) 32%,rgba(25,23,19,.08) 70%,rgba(25,23,19,0) 100%)}.wood-hero-copy{position:absolute;top:50%;left:9.6%;transform:translateY(-51%);max-width:540px}.wood-hero-copy .wood-kicker{color:#fff;font-size:10px;letter-spacing:.24em;margin-bottom:17px}.wood-hero-copy h1{font:400 clamp(54px,5.1vw,78px)/.96 var(--wood-serif);letter-spacing:-.055em;margin:0 0 24px;color:#fff}.wood-hero-copy p{font-size:15px;line-height:1.75;margin:0 0 23px;color:#f4f0e9}.wood-primary-button{display:inline-flex;align-items:center;gap:26px;padding:16px 19px;background:#fbf9f5;color:#292823;text-decoration:none;font-size:12px;min-height:48px;transition:background .25s,color .25s}.wood-primary-button:hover{background:#292823;color:#fff}.wood-hero-pagination{position:absolute;left:9.6%;right:9.6%;bottom:22px;display:flex;align-items:center;justify-content:flex-end}.wood-hero-numbers{display:flex;align-items:center;gap:24px}.wood-hero-numbers button{border:0;background:transparent;color:#fff;padding:4px 0;font:11px var(--wood-sans);cursor:pointer;opacity:.72;position:relative}.wood-hero-numbers button.active{opacity:1}.wood-hero-numbers button.active:after{content:'';position:absolute;left:29px;top:50%;width:24px;height:1px;background:#fff}.wood-hero-arrows{display:flex;gap:8px}.wood-hero-arrows button{width:40px;height:40px;border:1px solid #ffffff9c;border-radius:50%;color:#fff;background:transparent;font-size:19px;cursor:pointer;transition:background .2s}.wood-hero-arrows button:hover{background:#ffffff2b}\n.wood-space-section{padding:20px 5.8% 64px;display:grid;grid-template-columns:clamp(205px,14.2vw,290px) minmax(0,1fr);gap:40px;align-items:center;min-width:0}.wood-section-intro{min-width:0;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;padding-block:2px;margin-top:0}.wood-section-intro h2,.wood-products-intro h2,.wood-mobile-section-heading h2{font:500 32px/1.12 var(--wood-serif);letter-spacing:-.04em;margin:0 0 13px}.wood-section-intro p,.wood-products-intro p{font-size:13px;line-height:1.65;color:var(--wood-muted);margin:0 0 22px}.wood-section-intro>a,.wood-products-intro>a,.wood-mobile-section-heading>a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--wood-ink);font-size:11px;border-bottom:1px solid #777064;padding-bottom:6px}.wood-space-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.wood-space-card{height:clamp(190px,13.8vw,285px);position:relative;overflow:hidden;display:block;background:#d5cec2;color:#fff;text-decoration:none}.wood-space-card:after{content:'';position:absolute;inset:30% 0 0;background:linear-gradient(transparent,rgba(22,20,17,.58))}.wood-space-card img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s cubic-bezier(.2,.7,.2,1)}.wood-space-card:hover img{transform:scale(1.045)}.wood-space-card>span{position:absolute;z-index:1;left:16px;bottom:16px;display:flex;align-items:center;gap:7px;font:500 clamp(18px,1.65vw,25px)/1 var(--wood-serif);color:#fff}.wood-space-card>span svg{stroke-width:1.5}\n.wood-products-section{padding:5px 5.8% 82px;display:grid;grid-template-columns:205px minmax(0,1fr);gap:40px}.wood-products-intro{padding-top:4px}.wood-products-content{min-width:0}.wood-product-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px 16px;align-items:start}.wood-product-grid .product-card{min-width:0;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible;display:flex;flex-direction:column}.wood-product-grid .product-image{position:relative;aspect-ratio: .78 / 1;overflow:hidden;background:#e4dfd7;border-radius:0;margin:0}.wood-product-grid .product-image-link{display:block;width:100%;height:100%;position:absolute;inset:0}.wood-product-grid .product-image-primary,.wood-product-grid .product-image-secondary{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .45s ease,transform .7s ease}.wood-product-grid .product-image-primary{position:relative}.wood-product-grid .product-image-secondary{position:absolute;inset:0;opacity:0}.wood-product-grid .product-card:hover .product-image-primary{transform:scale(1.025)}.wood-product-grid .product-card:hover .product-image-secondary{opacity:1}.wood-product-grid .heart{position:absolute;top:12px;right:12px;width:30px;height:30px;border:0;background:transparent;color:#292823;padding:4px;z-index:2}.wood-product-grid .heart svg{width:20px;height:20px}.wood-product-grid .heart-tooltip{display:none}.wood-product-grid .product-image-bottom-spacer{display:none}.wood-product-grid .product-copy{padding:11px 0 0;display:flex;flex-direction:column;gap:4px}.wood-product-grid .product-meta{display:none}.wood-product-grid .product-title-link{text-decoration:none;color:var(--wood-ink)}.wood-product-grid .product-title-link h3{font:400 13px/1.4 var(--wood-sans);margin:0;color:var(--wood-ink)}.wood-product-grid .product-description{font-size:11px;line-height:1.4;color:#827b70;margin:0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.wood-product-grid .rating{display:none}.wood-product-grid .product-bottom-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:1px}.wood-product-grid .price{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.wood-product-grid .price strong{font-size:12px;font-weight:500;color:var(--wood-ink)}.wood-product-grid .price del,.wood-product-grid .save-badge{display:none}.wood-product-grid .add{border:1px solid #d4cec4;background:transparent;color:var(--wood-ink);border-radius:0;min-height:30px;padding:5px 8px;font-size:10px;opacity:0;transition:opacity .2s,background .2s;white-space:nowrap}.wood-product-grid .product-card:hover .add,.wood-product-grid .add:focus{opacity:1}.wood-product-grid .add:hover{background:var(--wood-ink);color:#fff}.wood-product-grid .add-label{font-size:10px}.wood-product-grid .add-icon,.wood-product-grid .add-shine{display:none}.wood-empty-products{grid-column:1/-1;color:var(--wood-muted);font-size:13px;padding:35px 0}.wood-mobile-section-heading{display:none}\n.wood-editorial{display:grid;grid-template-columns:.78fr 1.22fr;min-height:470px;background:#e9e3d9}.wood-editorial-copy{padding:70px clamp(30px,8vw,120px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center}.wood-editorial-copy h2{font:400 clamp(42px,4.5vw,65px)/1.02 var(--wood-serif);letter-spacing:-.05em;margin:18px 0 20px}.wood-editorial-copy h2 em{font-weight:400;color:#8d6f54}.wood-editorial-copy p{max-width:390px;font-size:13px;line-height:1.85;color:#716b62;margin:0 0 24px}.wood-outline-button{display:inline-flex;align-items:center;gap:18px;padding:13px 17px;border:1px solid #a9a094;color:var(--wood-ink);text-decoration:none;font-size:11px}.wood-outline-button:hover{background:#292823;color:#fff;border-color:#292823}.wood-editorial-image{min-height:420px;overflow:hidden}.wood-editorial-image img{width:100%;height:100%;object-fit:cover;display:block}.wood-service-strip{padding:30px 5.8%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;border-bottom:1px solid var(--wood-line)}.wood-service-strip>div{display:flex;align-items:center;justify-content:center;gap:13px}.wood-service-strip svg{flex-shrink:0;stroke-width:1.25}.wood-service-strip span{display:flex;flex-direction:column;gap:4px}.wood-service-strip strong{font-size:11px;font-weight:600}.wood-service-strip small{font-size:10px;color:var(--wood-muted)}\n/* Footer keeps the original links and newsletter integrations, with the new visual language. */\n.footer{background:#292823!important;color:#f6f2ea!important;padding-top:54px!important}.footer .footer-main{max-width:none!important;padding-left:5.8%!important;padding-right:5.8%!important}.footer .wood-footer-wordmark{display:flex!important;flex-direction:column;align-items:flex-start;gap:12px;text-decoration:none!important;color:#f6f2ea!important}.footer .wood-footer-wordmark span{font-size:21px;letter-spacing:.2em;font-weight:500}.footer .footer-main h4{font-size:11px!important;letter-spacing:.14em;text-transform:uppercase}.footer a{color:inherit}.footer .footer-bottom{padding-left:5.8%!important;padding-right:5.8%!important}\n/* Reuse the existing newsletter and content pages without changing their data flow. */\n.newsletter{background:#e9e3d9!important;color:var(--wood-ink)!important}.newsletter .eyebrow{color:#796d5d!important}.newsletter h2{font-family:var(--wood-serif)!important}.newsletter form input{border-radius:0!important}.newsletter form button{border-radius:0!important}\n@media(max-width:1100px){.wood-header{padding:0 3.5%}.wood-wordmark{font-size:19px;letter-spacing:.18em}.wood-wordmark-text{font-size:19px;letter-spacing:.18em}.wood-nav{gap:14px}.wood-nav>a{font-size:11px}.wood-header-actions{gap:12px}.wood-space-section,.wood-products-section{padding-left:4%;padding-right:4%;grid-template-columns:170px minmax(0,1fr);gap:25px}.wood-product-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.wood-product-grid .product-card:nth-child(n+5){display:none}.wood-announcement-right{right:3.5%}}\n@media(max-width:780px){.wood-announcement{height:32px;font-size:9px;padding:0 12px;gap:8px}.wood-announcement-right{display:none}.wood-header{height:62px;padding:0 18px;grid-template-columns:36px 1fr auto;gap:10px}.wood-mobile-menu{display:inline-flex;justify-self:start}.wood-wordmark{justify-self:center;width:clamp(120px,38vw,170px);font-size:18px;letter-spacing:.18em}.wood-wordmark img{object-position:center}.wood-wordmark-text{font-size:18px;letter-spacing:.18em}.wood-nav{display:none;position:absolute;top:100%;left:0;right:0;height:auto;background:#fbf9f5;padding:12px 22px 24px;box-shadow:0 16px 20px #211e1714;align-items:stretch;flex-direction:column;gap:0}.wood-nav.is-open{display:flex}.wood-nav>a{min-height:47px;border-bottom:1px solid #e9e3da;justify-content:space-between;font-size:13px}.wood-header-actions{gap:11px}.wood-action-search span{display:none}.wood-header-actions button svg{width:19px;height:19px}.wood-header-actions button:first-child{display:inline-flex}.wood-header-actions button:nth-child(2){display:none}.wood-bag b{top:-6px;right:-6px}.wood-mega-menu{display:none}.wood-search-panel{top:62px;padding:12px 18px;gap:10px}.wood-search-panel input{min-width:0}.wood-hero{height:615px;min-height:0;max-height:none}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.62),rgba(25,23,19,.12)),linear-gradient(0deg,rgba(25,23,19,.28),transparent 50%)}.wood-hero-copy{left:7%;right:6%;top:49%;max-width:460px}.wood-hero-copy h1{font-size:clamp(52px,12vw,72px)}.wood-hero-copy p{font-size:13px}.wood-hero-pagination{left:7%;right:7%;bottom:18px}.wood-space-section{padding:42px 18px 48px;display:block}.wood-section-intro{display:grid;grid-template-columns:1fr auto;align-items:end;margin-bottom:20px}.wood-section-intro h2{font-size:29px;margin:0}.wood-section-intro p{grid-column:1;grid-row:2;margin:8px 0 0;font-size:12px}.wood-section-intro>a{grid-column:2;grid-row:1/3;align-self:end}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.wood-space-card{height:clamp(175px,51vw,260px)}.wood-space-card>span{left:12px;bottom:13px;font-size:21px}.wood-products-section{padding:5px 18px 55px;display:block}.wood-products-intro{display:none}.wood-mobile-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.wood-mobile-section-heading h2{font-size:29px;margin:0}.wood-mobile-section-heading>a{font-size:11px}.wood-product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 12px}.wood-product-grid .product-card:nth-child(n+5){display:flex}.wood-product-grid .product-image{aspect-ratio:.79/1}.wood-product-grid .product-copy{padding-top:9px}.wood-product-grid .product-title-link h3{font-size:12px}.wood-product-grid .product-description{font-size:10px}.wood-product-grid .price strong{font-size:12px}.wood-product-grid .add{opacity:1;padding:5px 6px;min-height:27px}.wood-product-grid .add-label{font-size:9px}.wood-product-grid .heart{top:8px;right:8px}.wood-editorial{grid-template-columns:1fr}.wood-editorial-copy{padding:48px 24px 42px;order:2}.wood-editorial-copy h2{font-size:48px}.wood-editorial-image{min-height:290px;height:65vw;order:1}.wood-service-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:23px 12px;padding:25px 18px}.wood-service-strip>div{justify-content:flex-start;gap:10px}.wood-service-strip svg{width:20px}.wood-service-strip strong{font-size:10px}.wood-service-strip small{font-size:9px}.footer .footer-main{padding-left:22px!important;padding-right:22px!important}.footer .footer-bottom{padding-left:22px!important;padding-right:22px!important}.footer .wood-footer-wordmark span{font-size:18px}}\n@media(max-width:390px){.wood-wordmark{font-size:15px;letter-spacing:.16em}.wood-wordmark-text{font-size:15px;letter-spacing:.16em}.wood-header-actions{gap:8px}.wood-header-actions button svg{width:18px;height:18px}.wood-hero{height:540px}.wood-hero-copy h1{font-size:49px}.wood-space-card>span{font-size:18px}.wood-product-grid .product-bottom-row{align-items:flex-start;flex-direction:column}.wood-product-grid .add{width:100%}.wood-service-strip{grid-template-columns:1fr 1fr}}\n.wood-demo-product{min-width:0;display:flex;flex-direction:column;align-items:stretch}.wood-demo-image{aspect-ratio:.78/1;position:relative;display:block;overflow:hidden;background:#e4dfd7;color:var(--wood-ink)}.wood-demo-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s ease}.wood-demo-product:hover .wood-demo-image img{transform:scale(1.035)}.wood-demo-heart{position:absolute;right:12px;top:12px}.wood-demo-quick{position:absolute;bottom:0;left:0;right:0;padding:11px 6px;text-align:center;background:#fbf9f5eF;color:var(--wood-ink);font-size:11px;transform:translateY(100%);transition:transform .25s}.wood-demo-product:hover .wood-demo-quick{transform:translateY(0)}.wood-demo-name{margin-top:11px;font-size:13px;line-height:1.4;text-decoration:none;color:var(--wood-ink)}.wood-demo-product p{margin:3px 0 5px;font-size:11px;color:#827b70}.wood-demo-product>strong{font-size:12px;font-weight:500}@media(max-width:780px){.wood-demo-heart{top:8px;right:8px}.wood-demo-name{font-size:12px}.wood-demo-quick{transform:none;font-size:10px;padding:8px 4px}}\n@media(min-width:781px){.wood-hero{height:440px;min-height:0}.wood-space-section{padding-top:24px}.wood-section-intro{overflow:visible;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;margin:0 0 13px;padding:2px 0}}\n/* Homepage Best Sellers: clean editorial product layout matching the Oak Lounge reference. */\n.wood-product-grid .wood-home-product{min-width:0;display:flex;flex-direction:column;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible}\n/* Best Sellers image ratio matches reference: 206 x 265 */.wood-product-grid .wood-home-product-image{position:relative;width:100%;aspect-ratio:206/265;height:auto;min-height:0;overflow:hidden;background:#e4dfd7;border-radius:0}\n.wood-product-grid .wood-home-product-image>a{position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden}\n.wood-product-grid .wood-home-product-image img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .65s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-image img{transform:scale(1.045)}\n.wood-product-grid .wood-home-product-quick{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 8px;background:rgba(251,249,245,.94);color:var(--wood-ink);font-size:12px;letter-spacing:.01em;transform:translateY(101%);opacity:0;transition:transform .28s ease,opacity .28s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-quick,.wood-product-grid .wood-home-product:focus-within .wood-home-product-quick{transform:translateY(0);opacity:1}\n.wood-product-grid .wood-home-product-image-link:focus-visible{outline:2px solid var(--wood-ink);outline-offset:-3px}\n.wood-product-grid .wood-home-product-heart{position:absolute;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:0;background:transparent;color:#292823;cursor:pointer}\n.wood-product-grid .wood-home-product-details{padding:11px 0 0;min-width:0}\n.wood-product-grid .wood-home-product-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}\n.wood-product-grid .wood-home-product-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;color:var(--wood-ink);font-size:13px;line-height:1.4}\n.wood-product-grid .wood-home-product-price{flex-shrink:0;color:var(--wood-ink);font-size:12px;font-weight:500;white-space:nowrap}\n.wood-product-grid .wood-home-product-material{margin:7px 0 0;color:#827b70;font-size:11px;line-height:1.4}\n@media(max-width:780px){.wood-product-grid .wood-home-product-image{aspect-ratio:.78/1}.wood-product-grid .wood-home-product-heart{top:8px;right:8px}.wood-product-grid .wood-home-product-name{font-size:12px}.wood-product-grid .wood-home-product-price{font-size:12px}.wood-product-grid .wood-home-product-material{font-size:10px;margin-top:5px}.wood-product-grid .wood-home-product-title-row{gap:5px}}\n\n\n\n/* WOODISTRY SHOP COLLECTION */\n.wood-shop-sort-label{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:220px;color:#292823;font-family:var(--wood-sans)}\n.wood-shop-sort-caption{flex:0 0 auto;font-size:12px;color:#716b62}\n.wood-shop-sort-label select{appearance:auto;min-width:170px;max-width:100%;padding:10px 26px 10px 2px;border:0;border-bottom:1px solid #292823;border-radius:0;background:transparent;color:#292823;font:400 13px/1.4 var(--wood-sans);cursor:pointer;outline-offset:4px}\n.wood-shop-sort-label select:focus-visible{outline:1px solid #8d806e}\n.wood-shop-page .breadcrumbs a{color:inherit;text-decoration:none}\n.wood-shop-title{align-items:flex-end;gap:32px}\n.wood-shop-title h1{max-width:900px}\n.wood-shop-title p{max-width:620px}\n.wood-shop-sort-label select{min-width:170px}\n.wood-shop-filters{display:flex;gap:30px;align-items:center;overflow-x:auto;white-space:nowrap;scrollbar-width:none}\n.wood-shop-filters::-webkit-scrollbar{display:none}\n.wood-shop-filters a{flex:0 0 auto;text-decoration:none}\n.wood-shop-filters a.active{color:#292824;border-bottom-color:#292824}\n.wood-shop-result-count{margin:22px 0 18px;color:#777167;font-size:12px;letter-spacing:.04em}\n.wood-shop-grid{align-items:start}\n.wood-shop-empty{grid-column:1/-1;min-height:300px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:48px 0 64px;border-top:1px solid #e5dfd5}\n.wood-shop-empty h2{margin:12px 0;font-family:Georgia,\"Times New Roman\",serif;font-size:clamp(28px,3vw,42px);font-weight:400;line-height:1.12;color:#292824}\n.wood-shop-empty p{max-width:470px;margin:0;color:#777167;font-size:15px;line-height:1.8}\n.wood-shop-reset{display:inline-flex;align-items:center;gap:12px;margin-top:24px;padding:13px 0;border-bottom:1px solid #292824;color:#292824;text-decoration:none;font-size:13px}\n.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}\n@media(max-width:780px){.wood-shop-title{align-items:flex-start;flex-direction:column;gap:20px}.wood-shop-title h1{font-size:clamp(42px,11vw,64px)}.wood-shop-filters{gap:22px}.wood-shop-empty{min-height:240px;padding:34px 0 48px}.wood-shop-result-count{margin:18px 0 14px}}"
 
 
 const WOODISTRY_FOOTER_CSS = `
