@@ -109,25 +109,203 @@ const woodistrySampleProducts = [
   { name: 'Edison Sideboard', material: 'American walnut', price: '$89,900', image: '' }
 ]
 
+// Homepage cards: original editorial image style, with safe alternate assets if any URL is missing.
 const woodistrySpaces = [
-  { name: 'Living Room', image: '/woodistry-images/space-living-room.png', query: 'living-room' },
-  { name: 'Dining', image: '/woodistry-images/space-dining.png', query: 'dining' },
-  { name: 'Bedroom', image: '/woodistry-images/space-bedroom.png', query: 'bedroom' },
-  { name: 'Storage', image: '/woodistry-images/space-storage.png', query: 'storage' }
+  {
+    key: 'new-arrivals',
+    name: 'New Arrivals',
+    query: 'new-arrivals',
+    href: '/shop?filter=new',
+    image: '/woodistry-images/space-living-room.png',
+    fallbackImages: [
+      '/woodistry-images/hero-living.png',
+      '/woodistry-images/space-dining.png',
+      '/woodistry-images/space-storage.png'
+    ]
+  },
+  {
+    key: 'dining-serving',
+    name: 'Dining & Serving',
+    query: 'dining-serving',
+    href: '/shop?category=Dining%20%26%20Serving',
+    image: '/woodistry-images/space-dining.png',
+    fallbackImages: [
+      '/woodistry-images/hero-dining.png',
+      '/woodistry-images/space-living-room.png',
+      '/woodistry-images/space-storage.png'
+    ]
+  },
+  {
+    key: 'kitchen-essentials',
+    name: 'Kitchen Essentials',
+    query: 'kitchen-essentials',
+    href: '/shop?category=Kitchen%20Essentials',
+    image: '/woodistry-images/hero-dining.png',
+    fallbackImages: [
+      '/woodistry-images/space-dining.png',
+      '/woodistry-images/space-storage.png',
+      '/woodistry-images/space-living-room.png'
+    ]
+  },
+  {
+    key: 'storage-containers',
+    name: 'Storage & Containers',
+    query: 'storage-containers',
+    href: '/shop?category=Storage%20%26%20Containers',
+    image: '/woodistry-images/space-storage.png',
+    fallbackImages: [
+      '/woodistry-images/space-living-room.png',
+      '/woodistry-images/space-dining.png',
+      '/woodistry-images/hero-dining.png'
+    ]
+  }
 ]
+
+// CMS/product image fields can be strings or objects (for example { url } or { imageUrl }).
+// Normalize both shapes to an actual URL before passing them to an <img> element.
+const normalizeImageSource = value => {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const source = normalizeImageSource(item)
+      if (source) return source
+    }
+    return ''
+  }
+  if (value && typeof value === 'object') {
+    const candidates = [value.url, value.secure_url, value.src, value.imageUrl, value.image, value.thumbnail, value.desktopImage]
+    for (const candidate of candidates) {
+      const source = normalizeImageSource(candidate)
+      if (source) return source
+    }
+  }
+  return ''
+}
+
+const productImageSource = product => {
+  if (!product) return ''
+  return [
+    product.image,
+    product.imageUrl,
+    product.thumbnail,
+    product.mainImage,
+    product.featuredImage,
+    product.images,
+    product.gallery,
+    product.media
+  ].map(normalizeImageSource).find(Boolean) || ''
+}
+
+const normalizeSpaceImageMap = spaces => {
+  const result = {}
+
+  // Every legacy/backend key is mapped to the exact keys used by homepage cards.
+  const aliases = {
+    'New Arrivals': [
+      'New Arrivals', 'newArrivals', 'new-arrivals', 'new_arrivals', 'newarrivals'
+    ],
+    'Dining & Serving': [
+      'Dining & Serving', 'Dining', 'dining', 'diningAndServing',
+      'dining-and-serving', 'dining_serving', 'diningserving'
+    ],
+    'Kitchen Essentials': [
+      'Kitchen Essentials', 'Kitchen', 'kitchen', 'kitchenEssentials',
+      'kitchen-essentials', 'kitchen_essentials', 'kitchenessentials'
+    ],
+    'Storage & Containers': [
+      'Storage & Containers', 'Storage', 'storage', 'storageAndContainers',
+      'storage-and-containers', 'storage_containers', 'storagecontainers'
+    ]
+  }
+
+  const canonicalByAlias = Object.fromEntries(
+    Object.entries(aliases).flatMap(([canonical, keys]) =>
+      keys.map(key => [String(key).toLowerCase().replace(/[^a-z0-9]+/g, ''), canonical])
+    )
+  )
+
+  const add = (key, value) => {
+    const source = normalizeImageSource(value)
+    if (!source || !key) return
+
+    const originalKey = String(key).trim()
+    const compactKey = originalKey.toLowerCase().replace(/[^a-z0-9]+/g, '')
+    const slugKey = originalKey.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+
+    result[originalKey] = source
+    result[compactKey] = source
+    result[slugKey] = source
+
+    const canonical = canonicalByAlias[compactKey]
+    if (canonical) {
+      result[canonical] = source
+      for (const alias of aliases[canonical]) {
+        result[alias] = source
+        result[alias.toLowerCase().replace(/[^a-z0-9]+/g, '')] = source
+        result[alias.toLowerCase().replace(/[^a-z0-9]+/g, '-')] = source
+      }
+    }
+  }
+
+  const getImage = item =>
+    item?.image || item?.imageUrl || item?.url || item?.src ||
+    item?.desktopImage || item?.secure_url || item
+
+  if (Array.isArray(spaces)) {
+    spaces.forEach((item, index) => {
+      if (!item) return
+      const key = item.name || item.key || item.slug || item.title || `space-${index + 1}`
+      const image = getImage(item)
+      add(key, image)
+      if (item.name) add(item.name, image)
+      if (item.key) add(item.key, image)
+      if (item.slug) add(item.slug, image)
+      if (item.title) add(item.title, image)
+    })
+  } else if (spaces && typeof spaces === 'object') {
+    Object.entries(spaces).forEach(([key, value]) => {
+      const image = getImage(value)
+      add(key, image)
+      if (value && typeof value === 'object') {
+        if (value.name) add(value.name, image)
+        if (value.key) add(value.key, image)
+        if (value.slug) add(value.slug, image)
+        if (value.title) add(value.title, image)
+      }
+    })
+  }
+
+  return result
+}
 
 
 // ============================================================
 // WOODISTRY IMAGE — BRAND SHIMMER WHILE LOADING
 // ============================================================
-function WoodistryImage({ src, alt = '', className = '', imageClassName = '', loading = 'lazy' }) {
+function WoodistryImage({ src, fallbackSrcs = [], alt = '', className = '', imageClassName = '', loading = 'lazy' }) {
+  const candidates = Array.from(new Set([src, ...(Array.isArray(fallbackSrcs) ? fallbackSrcs : [fallbackSrcs])]
+    .map(normalizeImageSource)
+    .filter(Boolean)))
+  const sourceSignature = candidates.join('||')
+  const [sourceIndex, setSourceIndex] = useState(0)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
+  const currentSrc = candidates[sourceIndex] || ''
 
   useEffect(() => {
+    setSourceIndex(0)
     setLoaded(false)
     setFailed(false)
-  }, [src])
+  }, [sourceSignature])
+
+  const handleImageError = () => {
+    setLoaded(false)
+    if (sourceIndex < candidates.length - 1) {
+      setSourceIndex(index => index + 1)
+    } else {
+      setFailed(true)
+    }
+  }
 
   return (
     <span
@@ -139,17 +317,18 @@ function WoodistryImage({ src, alt = '', className = '', imageClassName = '', lo
           <span className="woodistry-shimmer-wordmark">WOODISTRY</span>
         </span>
       )}
-      {src && !failed && (
+      {currentSrc && !failed && (
         <img
-          src={src}
+          key={currentSrc}
+          src={currentSrc}
           alt={alt}
           loading={loading}
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          onLoad={() => { setLoaded(true); setFailed(false) }}
+          onError={handleImageError}
           className={`woodistry-image-content${loaded ? ' is-visible' : ''} ${imageClassName}`.trim()}
         />
       )}
-      {(!src || failed) && (
+      {(!currentSrc || failed) && (
         <span className="woodistry-image-shimmer woodistry-image-fallback" aria-label="WOODISTRY image unavailable">
           <span className="woodistry-shimmer-wordmark">WOODISTRY</span>
         </span>
@@ -220,15 +399,68 @@ function MegaMenuImage({ src, fallbackSrc, alt }) {
 function Header() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [activeMenuKey, setActiveMenuKey] = useState('')
+  const [mobileExpanded, setMobileExpanded] = useState('')
   const [announcementText, setAnnouncementText] = useState('Complimentary delivery on orders over $1,500')
   const [announcementEnabled, setAnnouncementEnabled] = useState(true)
   const [menuProducts, setMenuProducts] = useState([])
-  const [livingProduct, setLivingProduct] = useState(null)
-  const [seasonalProduct, setSeasonalProduct] = useState(null)
   const { user } = useAuth()
   const { count, products: storeProducts = [] } = useStore()
   const navigate = useNavigate()
+
+  const navigation = [
+    {
+      key: 'shop',
+      label: 'Shop',
+      to: '/shop',
+      children: [
+        { label: 'All Products', value: '', to: '/shop' },
+        { label: 'New Arrivals', to: '/shop?filter=new' },
+        { label: 'Best Sellers', to: '/shop?filter=best-selling' }
+      ]
+    },
+    {
+      key: 'dining-serving',
+      label: 'Dining & Serving',
+      to: '/shop?category=Dining%20%26%20Serving',
+      children: [
+        { label: 'Serving Trays', value: 'Serving Trays' },
+        { label: 'Serving Platters', value: 'Serving Platters' },
+        { label: 'Platters', value: 'Platters' },
+        { label: 'Cake Stands', value: 'Cake Stands' },
+        { label: 'Tea Coasters', value: 'Tea Coasters' },
+        { label: 'Cups & Mugs', value: 'Cups & Mugs' },
+        { label: 'Salad Bowls', value: 'Salad Bowls' },
+        { label: 'Napkin Holders', value: 'Napkin Holders' }
+      ]
+    },
+    {
+      key: 'kitchen-essentials',
+      label: 'Kitchen Essentials',
+      to: '/shop?category=Kitchen%20Essentials',
+      children: [
+        { label: 'Spice Boxes', value: 'Spice Boxes' },
+        { label: 'Chopping Boards', value: 'Chopping Boards' },
+        { label: 'Mortar & Pestle', value: 'Mortar & Pestle' },
+        { label: 'Serving & Cooking Spoons', value: 'Serving & Cooking Spoons' },
+        { label: 'Cutlery Holders', value: 'Cutlery Holders' },
+        { label: 'Kitchen Organisers', value: 'Kitchen Organisers' }
+      ]
+    },
+    {
+      key: 'storage-containers',
+      label: 'Storage & Containers',
+      to: '/shop?category=Storage%20%26%20Containers',
+      children: [
+        { label: 'Dry Fruit Boxes', value: 'Dry Fruit Boxes' },
+        { label: 'Bowls & Jars', value: 'Bowls & Jars' },
+        { label: 'Refreshment Jars', value: 'Refreshment Jars' },
+        { label: 'Casseroles', value: 'Casseroles' },
+        { label: 'Folding & Fruit Baskets', value: 'Folding & Fruit Baskets' }
+      ]
+    },
+    { key: 'our-story', label: 'Our Story', to: '/about' }
+  ]
 
   useEffect(() => {
     let cancelled = false
@@ -247,7 +479,7 @@ function Header() {
     return () => { cancelled = true }
   }, [])
 
-  // Fetch the current catalogue from the API so Admin product updates appear here too.
+  // Load actual products so featured menu cards use the current catalogue.
   useEffect(() => {
     let cancelled = false
     async function loadMegaMenuProducts() {
@@ -270,8 +502,7 @@ function Header() {
         const contextProducts = Array.isArray(storeProducts) ? storeProducts : []
         const source = list.length ? list : contextProducts
         if (!cancelled) {
-          const active = source.filter(product => product && product.enabled !== false && product.isActive !== false)
-          setMenuProducts(active)
+          setMenuProducts(source.filter(product => product && product.enabled !== false && product.isActive !== false))
         }
       } catch (error) {
         console.error('Mega menu product load error:', error)
@@ -281,60 +512,68 @@ function Header() {
     return () => { cancelled = true }
   }, [])
 
-  const navItems = [
-    { label: 'Shop', to: '/shop' },
-    { label: 'Living', to: '/shop?category=Living%20Room' },
-    { label: 'Dining', to: '/shop?category=Dining' },
-    { label: 'Bedroom', to: '/shop?category=Bedroom' },
-    { label: 'Gift', to: '/shop?category=Gift' },
-    { label: 'About', to: '/about' }
-  ]
-
-  const openShopMenu = () => {
-    setMenuOpen(true)
-
-    const livingProducts = menuProducts.filter(product =>
-      /living\s*room|living-room|lounge|sofa|couch|armchair|accent chair|coffee table/i.test(
-        `${product.category || ''} ${product.name || ''} ${product.collection || ''}`
-      )
-    )
-
-    const markedSeasonalProducts = menuProducts.filter(product =>
-      product.seasonal === true ||
-      product.isSeasonal === true ||
-      /seasonal|spring|summer|autumn|fall|winter/i.test(
-        `${product.collection || ''} ${product.collectionName || ''} ${product.tag || ''} ${Array.isArray(product.tags) ? product.tags.join(' ') : product.tags || ''} ${product.name || ''}`
-      )
-    )
-    // If the catalogue has no explicit seasonal flag yet, still feature a real catalogue item.
-    const seasonalProducts = markedSeasonalProducts.length
-      ? markedSeasonalProducts
-      : (menuProducts.filter(product => !livingProducts.includes(product) && megaMenuProductImage(product)).length
-          ? menuProducts.filter(product => !livingProducts.includes(product) && megaMenuProductImage(product))
-          : menuProducts.filter(product => megaMenuProductImage(product)))
-
-    setLivingProduct(current => chooseMegaMenuProduct(livingProducts, current))
-    setSeasonalProduct(current => chooseMegaMenuProduct(seasonalProducts, current))
-  }
-
   const productLink = product => product?.slug
     ? `/product/${product.slug}`
     : product?._id || product?.id
       ? `/product/${product._id || product.id}`
       : '/shop'
 
+  const activeMenuItem = navigation.find(item => item.key === activeMenuKey && item.children)
+  const productsWithImages = menuProducts.filter(product => megaMenuProductImage(product))
+  const featuredProductA = productsWithImages[0] || null
+  const featuredProductB = productsWithImages.find(product =>
+    String(product?._id || product?.id || product?.slug) !== String(featuredProductA?._id || featuredProductA?.id || featuredProductA?.slug)
+  ) || productsWithImages[1] || null
+
+  // Menu children represent subcategories; keep parent category links on the main navigation items.
+  const categoryHref = child => child.to || `/shop?subcategory=${encodeURIComponent(child.value || child.label)}`
+  const closeNavigation = () => {
+    setOpen(false)
+    setMobileExpanded('')
+    setActiveMenuKey('')
+  }
+
   return (
     <>
+      <style>{`
+        .wood-nav-item{position:relative;display:flex;align-items:center;gap:3px;height:100%;white-space:nowrap}
+        .wood-nav-item>a{height:100%;display:flex;align-items:center;text-decoration:none;color:var(--wood-ink);font-size:12px;transition:opacity .2s}
+        .wood-nav-item>a:hover{opacity:.58}
+        .wood-nav-trigger{display:inline-flex;align-items:center;justify-content:center;padding:3px;border:0;background:transparent;color:inherit;cursor:pointer}
+        .wood-nav-trigger svg{transition:transform .2s ease}
+        .wood-nav-item.is-expanded .wood-nav-trigger svg{transform:rotate(180deg)}
+        .wood-category-mega{grid-template-columns:minmax(200px,.9fr) minmax(220px,1fr) minmax(220px,1fr);align-items:stretch;gap:30px;padding:34px 8.5% 32px;max-height:min(72vh,620px);overflow-y:auto}
+        .wood-mega-heading{margin:0 0 5px;font:400 27px/1.1 var(--wood-serif);letter-spacing:-.025em;color:var(--wood-ink)}
+        .wood-category-mega .wood-mega-links{gap:12px;min-width:0}
+        .wood-category-mega .wood-mega-links>a{font-size:12px;letter-spacing:.01em;text-transform:none;line-height:1.4;white-space:normal}
+        .wood-category-mega .wood-mega-links>a:hover{opacity:.58}
+        .wood-category-mega .wood-mega-feature{grid-template-columns:1fr;grid-template-rows:minmax(125px,1fr) auto;align-content:start;gap:12px}
+        .wood-category-mega .wood-mega-feature img{height:clamp(130px,12vw,190px);background:#e6dfd3}
+        .wood-category-mega .wood-mega-feature span{gap:7px}
+        .wood-category-mega .wood-mega-feature small{font-size:9px;letter-spacing:.17em;text-transform:uppercase;color:#756e62}
+        .wood-category-mega .wood-mega-feature strong{font-size:21px;line-height:1.15}
+        .wood-category-mega .wood-mega-close{top:13px;right:5.8%}
+        .wood-mobile-submenu{display:none}
+        @media(max-width:1100px) and (min-width:781px){.wood-nav{gap:clamp(9px,1vw,15px)}.wood-nav-item>a{font-size:11px}.wood-wordmark{width:clamp(130px,14vw,180px)}.wood-header-actions{gap:12px}.wood-category-mega{padding-left:5.8%;padding-right:5.8%;gap:20px}}
+        @media(max-width:780px){
+          .wood-nav-item{display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:0;width:100%;height:auto;white-space:normal}
+          .wood-nav-item>a{min-height:47px;width:100%;border-bottom:1px solid #e9e3da;justify-content:flex-start;font-size:13px}
+          .wood-nav-trigger{min-height:47px;border-bottom:1px solid #e9e3da}
+          .wood-mobile-submenu{display:flex;grid-column:1/-1;flex-direction:column;align-items:stretch;padding:4px 0 12px 13px;border-bottom:1px solid #e9e3da}
+          .wood-mobile-submenu a{padding:10px 0;color:var(--wood-muted);text-decoration:none;font-size:12px;line-height:1.35}
+          .wood-mobile-submenu a:hover{color:var(--wood-ink)}
+        }
+      `}</style>
       {announcementEnabled && announcementText && (
         <div className="wood-announcement">
           <span>{announcementText}</span>
         </div>
       )}
-      <header className="wood-header" onMouseLeave={() => setMenuOpen(false)}>
-        <button className="wood-mobile-menu" onClick={() => setOpen(!open)} aria-label="Toggle menu">
+      <header className="wood-header" onMouseLeave={() => setActiveMenuKey('')}>
+        <button className="wood-mobile-menu" onClick={() => { setOpen(!open); setActiveMenuKey(''); setMobileExpanded('') }} aria-label="Toggle menu" aria-expanded={open}>
           {open ? <X size={22} /> : <Menu size={22} />}
         </button>
-        <Link to="/" className="wood-wordmark" aria-label="Woodistry home">
+        <Link to="/" className="wood-wordmark" aria-label="Woodistry home" onClick={closeNavigation}>
           <img
             src={logoUrl}
             alt="WOODISTRY"
@@ -346,16 +585,46 @@ function Header() {
           />
           <span className="wood-wordmark-text">WOODISTRY</span>
         </Link>
-        <nav className={`wood-nav ${open ? 'is-open' : ''}`}>
-          {navItems.map(item => (
-            <Link key={item.label} to={item.to}
-              onMouseEnter={() => {
-                if (item.label === 'Shop') openShopMenu()
-                else setMenuOpen(false)
-              }}
-              onClick={() => { setOpen(false); setMenuOpen(false) }}>
-              {item.label}{item.label === 'Shop' && <ChevronDown size={12} />}
-            </Link>
+        <nav className={`wood-nav ${open ? 'is-open' : ''}`} aria-label="Main navigation">
+          {navigation.map(item => (
+            <div
+              key={item.key}
+              className={`wood-nav-item${activeMenuKey === item.key || mobileExpanded === item.key ? ' is-expanded' : ''}`}
+              onMouseEnter={() => setActiveMenuKey(item.children ? item.key : '')}
+            >
+              <Link
+                to={item.to}
+                onFocus={() => { if (item.children) setActiveMenuKey(item.key) }}
+                onClick={closeNavigation}
+                aria-haspopup={item.children ? 'true' : undefined}
+              >
+                {item.label}
+              </Link>
+              {item.children && (
+                <button
+                  type="button"
+                  className="wood-nav-trigger"
+                  onClick={() => {
+                    if (open) {
+                      setMobileExpanded(current => current === item.key ? '' : item.key)
+                    } else {
+                      setActiveMenuKey(current => current === item.key ? '' : item.key)
+                    }
+                  }}
+                  aria-label={`Show ${item.label} subcategories`}
+                  aria-expanded={open ? mobileExpanded === item.key : activeMenuKey === item.key}
+                >
+                  <ChevronDown size={12} />
+                </button>
+              )}
+              {open && mobileExpanded === item.key && item.children && (
+                <div className="wood-mobile-submenu">
+                  {item.children.map(child => (
+                    <Link key={child.label} to={categoryHref(child)} onClick={closeNavigation}>{child.label}</Link>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </nav>
         <div className="wood-header-actions">
@@ -364,47 +633,46 @@ function Header() {
           <button onClick={() => navigate('/wishlist')} aria-label="Wishlist"><Heart size={22}/></button>
           <button className="wood-bag" onClick={() => navigate('/cart')} aria-label="Shopping bag"><ShoppingBag size={22}/><b>{count || 0}</b></button>
         </div>
-        {menuOpen && (
-          <div className="wood-mega-menu">
+        {activeMenuItem && (
+          <div className="wood-mega-menu wood-category-mega" onMouseEnter={() => setActiveMenuKey(activeMenuItem.key)}>
             <div className="wood-mega-links">
-              <span className="wood-kicker">Explore collections</span>
-              <Link to="/shop">All furniture</Link>
-              <Link to="/shop?category=Living%20Room">Living room</Link>
-              <Link to="/shop?category=Dining">Dining room</Link>
-              <Link to="/shop?category=Bedroom">Bedroom</Link>
-              <Link to="/shop?filter=new">New arrivals</Link>
+              <span className="wood-kicker">{activeMenuItem.key === 'shop' ? 'Explore Woodistry' : 'Shop by category'}</span>
+              <h3 className="wood-mega-heading">{activeMenuItem.key === 'shop' ? 'Find your essentials.' : activeMenuItem.label}</h3>
+              {activeMenuItem.children.map(child => (
+                <Link key={child.label} to={categoryHref(child)} onClick={closeNavigation}>{child.label}</Link>
+              ))}
             </div>
-            <Link to={livingProduct ? productLink(livingProduct) : '/shop?category=Living%20Room'} className="wood-mega-feature">
+            <Link to={featuredProductA ? productLink(featuredProductA) : activeMenuItem.to} className="wood-mega-feature" onClick={closeNavigation}>
               <MegaMenuImage
-                src={megaMenuProductImage(livingProduct)}
-                fallbackSrc={woodistrySpaces[0].image}
-                alt={livingProduct?.name || 'Living room collection'}
+                src={megaMenuProductImage(featuredProductA)}
+                fallbackSrc="/woodistry-images/space-dining.png"
+                alt={featuredProductA?.name || 'Woodistry dining and serving collection'}
               />
               <span>
-                <small>THE LIVING EDIT</small>
-                <strong>{livingProduct?.name || 'Make room for living.'}</strong>
-                <em>Shop now →</em>
+                <small>WOODISTRY EDIT</small>
+                <strong>{featuredProductA?.name || 'Made for everyday rituals.'}</strong>
+                <em>Discover pieces →</em>
               </span>
             </Link>
-            <Link to={seasonalProduct ? productLink(seasonalProduct) : '/shop?filter=seasonal'} className="wood-mega-feature">
+            <Link to={featuredProductB ? productLink(featuredProductB) : activeMenuItem.to} className="wood-mega-feature" onClick={closeNavigation}>
               <MegaMenuImage
-                src={megaMenuProductImage(seasonalProduct)}
-                fallbackSrc={woodistrySpaces[1].image}
-                alt={seasonalProduct?.name || 'Seasonal collection'}
+                src={megaMenuProductImage(featuredProductB)}
+                fallbackSrc="/woodistry-images/space-storage.png"
+                alt={featuredProductB?.name || 'Woodistry kitchen and storage collection'}
               />
               <span>
-                <small>SEASONAL COLLECTION</small>
-                <strong>{seasonalProduct?.name || 'Gather beautifully.'}</strong>
-                <em>Discover →</em>
+                <small>CRAFTED FOR HOME</small>
+                <strong>{featuredProductB?.name || 'Thoughtful wooden essentials.'}</strong>
+                <em>Explore collection →</em>
               </span>
             </Link>
-            <button className="wood-mega-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={19}/></button>
+            <button className="wood-mega-close" onClick={() => setActiveMenuKey('')} aria-label="Close menu"><X size={19}/></button>
           </div>
         )}
       </header>
       {search && (
         <form className="wood-search-panel" onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(e.target.q.value)}`); setSearch(false) }}>
-          <Search size={20}/><input name="q" autoFocus placeholder="Search furniture, materials and collections..."/><button type="submit">Search <ArrowRight size={15}/></button><button type="button" onClick={() => setSearch(false)} aria-label="Close search"><X size={18}/></button>
+          <Search size={20}/><input name="q" autoFocus placeholder="Search trays, kitchen essentials and more..."/><button type="submit">Search <ArrowRight size={15}/></button><button type="button" onClick={() => setSearch(false)} aria-label="Close search"><X size={18}/></button>
         </form>
       )}
     </>
@@ -525,6 +793,12 @@ function ProductCard({
 
   // Always prefer the normalized id, with _id as a safe fallback.
   const productId = product.id || product._id
+  const cardPrice = Number(product.price || 0)
+  const cardMrp = Number(product.mrp ?? product.old ?? product.compareAtPrice ?? 0)
+  const showDiscount =
+    (product.showDiscountPercent === true || product.showDiscountToCustomers === true) &&
+    cardMrp > cardPrice &&
+    cardMrp > 0
 
   const liked = wish.includes(productId)
 
@@ -739,6 +1013,9 @@ function ProductCard({
           <span className="product-category">
             {product.category}
           </span>
+          {(product.subcategory || product.subCategory) && (
+            <span className="product-subcategory">{product.subcategory || product.subCategory}</span>
+          )}
         </div>
 
         <Link
@@ -767,18 +1044,10 @@ function ProductCard({
         <div className="product-bottom-row">
           <div className="price">
             <strong>{money(product.price)}</strong>
-
-            {Number(product.old || 0) > Number(product.price || 0) && (
-              <del>{money(product.old)}</del>
-            )}
-
-            {Number(product.old || 0) > Number(product.price || 0) && (
+            {showDiscount && <del>{money(cardMrp)}</del>}
+            {showDiscount && (
               <span className="save-badge">
-                {Math.round(
-                  ((Number(product.old) - Number(product.price)) /
-                    Number(product.old)) *
-                    100
-                )}% off
+                {Math.round(((cardMrp - cardPrice) / cardMrp) * 100)}% off
               </span>
             )}
           </div>
@@ -839,7 +1108,13 @@ function WoodistryBestSellerCard({ product }) {
   const productId = product.id || product._id
   const liked = wish.includes(productId)
   const image = product.image || product.images?.[0] || ''
-  const material = product.material || product.materials || product.subtitle || product.category || ''
+  const price = Number(product.price || 0)
+  const mrp = Number(product.mrp ?? product.old ?? product.compareAtPrice ?? 0)
+  const showDiscount =
+    (product.showDiscountPercent === true || product.showDiscountToCustomers === true) &&
+    mrp > price &&
+    mrp > 0
+  const material = product.material || product.materials || product.subtitle || product.subcategory || product.category || ''
 
   return (
     <article className="wood-home-product">
@@ -858,7 +1133,11 @@ function WoodistryBestSellerCard({ product }) {
       <div className="wood-home-product-details">
         <div className="wood-home-product-title-row">
           <Link to={`/product/${product.slug}`} className="wood-home-product-name">{product.name}</Link>
-          <strong className="wood-home-product-price">{money(product.price)}</strong>
+          <span className="wood-home-product-price-wrap">
+            <strong className="wood-home-product-price">{money(product.price)}</strong>
+            {showDiscount && <del className="wood-home-product-old-price">{money(mrp)}</del>}
+            {showDiscount && <small className="wood-home-product-discount">{Math.round(((mrp - price) / mrp) * 100)}% off</small>}
+          </span>
         </div>
         {material && <p className="wood-home-product-material">{material}</p>}
       </div>
@@ -916,7 +1195,7 @@ function SectionHeading({
 // ============================================================
 
 function Home() {
-  const { bestSellingProducts, newArrivals } = useStore()
+  const { bestSellingProducts, newArrivals, products: storeProducts = [] } = useStore()
   const [heroSlides, setHeroSlides] = useState(defaultHeroSlides)
   const [heroIndex, setHeroIndex] = useState(0)
   const heroTouchStart = useRef(null)
@@ -934,14 +1213,8 @@ function Home() {
         const spaces = payload.spaces || payload.shopBySpace || payload.sectionImages?.spaces || {}
         if (!cancelled) {
           setSectionImages({
-            brandStory: payload.brandStory || payload.brandStoryImage || payload.brandStoryUrl || '',
-            spaces: Array.isArray(spaces)
-              ? spaces.reduce((acc, item) => {
-                  const image = item?.image || item?.imageUrl || item?.url || item?.src || ''
-                  if (item?.name && image) acc[item.name] = image
-                  return acc
-                }, {})
-              : (spaces && typeof spaces === 'object' ? spaces : {})
+            brandStory: normalizeImageSource(payload.brandStory || payload.brandStoryImage || payload.brandStoryUrl || ''),
+            spaces: normalizeSpaceImageMap(spaces)
           })
         }
       } catch (error) {
@@ -998,6 +1271,23 @@ function Home() {
   }, [heroSlides.length])
 
   const goToHero = index => setHeroIndex(((index % heroSlides.length) + heroSlides.length) % heroSlides.length)
+
+  // Always try to fill the Best Sellers row with up to five distinct active products.
+  // Use Best Sellers first, then New Arrivals, then the full store catalogue as fallback.
+  const bestSellerDisplayProducts = (() => {
+    const seen = new Set()
+    return [
+      ...(Array.isArray(bestSellingProducts) ? bestSellingProducts : []),
+      ...(Array.isArray(newArrivals) ? newArrivals : []),
+      ...(Array.isArray(storeProducts) ? storeProducts : [])
+    ].filter(product => {
+      if (!product || product.enabled === false || product.isActive === false) return false
+      const id = String(product.id || product._id || product.slug || product.name || '')
+      if (!id || seen.has(id)) return false
+      seen.add(id)
+      return true
+    }).slice(0, 5)
+  })()
 
   useEffect(() => {
     const elements = document.querySelectorAll('[data-xaaj-reveal]')
@@ -1066,15 +1356,52 @@ function Home() {
         </section>
 
         <section className="wood-space-section" data-xaaj-reveal="up">
-          <div className="wood-section-intro"><h2>Shop by<br/>Space</h2><p>Thoughtfully designed for<br/>every room in your home.</p><Link to="/shop">View All <ArrowRight size={14}/></Link></div>
-          <div className="wood-space-grid">{woodistrySpaces.map(space => <Link className="wood-space-card" key={space.name} to={`/shop?category=${encodeURIComponent(space.name)}`}><WoodistryImage className="wood-space-card-image" src={sectionImages.spaces?.[space.name] || sectionImages.spaces?.[space.query] || sectionImages.spaces?.[space.name.replace(/\s+/g, '').toLowerCase()] || space.image} alt={`${space.name} furniture`} loading="lazy"/><span>{space.name} <ArrowRight size={16}/></span></Link>)}</div>
+          <div className="wood-section-intro">
+            <h2>Shop by<br/>Space</h2>
+            <p>Thoughtfully designed for<br/>every room in your home.</p>
+            <Link to="/shop">View All <ArrowRight size={14}/></Link>
+          </div>
+          <div className="wood-space-grid">
+            {woodistrySpaces.map(space => {
+              const compactName = space.name.toLowerCase().replace(/[^a-z0-9]+/g, '')
+              const slugName = space.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+              const cmsImage = normalizeImageSource(
+                sectionImages.spaces?.[space.name]
+                || sectionImages.spaces?.[space.key]
+                || sectionImages.spaces?.[space.query]
+                || sectionImages.spaces?.[compactName]
+                || sectionImages.spaces?.[slugName]
+              )
+
+              return (
+                <Link
+                  className="wood-space-card"
+                  key={space.key}
+                  to={space.href}
+                  aria-label={`Shop ${space.name}`}
+                >
+                  <WoodistryImage
+                    className="wood-space-card-image"
+                    src={cmsImage || space.image}
+                    fallbackSrcs={space.fallbackImages}
+                    alt={`${space.name} collection`}
+                    loading="lazy"
+                  />
+                  <span className="wood-space-card-label">
+                    <span className="wood-space-card-label-text">{space.name}</span>
+                    <ArrowRight aria-hidden="true" size={16} />
+                  </span>
+                </Link>
+              )
+            })}
+          </div>
         </section>
 
         <section className="wood-products-section" data-xaaj-reveal="up">
           <div className="wood-products-intro"><h2>Best Sellers</h2><p>Timeless pieces, loved by<br/>designers and homemakers<br/>alike.</p><Link to="/shop">Shop All Best Sellers <ArrowRight size={15}/></Link></div>
           <div className="wood-products-content"><div className="wood-mobile-section-heading"><h2>Best Sellers</h2><Link to="/shop">View all <ArrowRight size={14}/></Link></div><div className="wood-product-grid">
-            {(bestSellingProducts.length ? bestSellingProducts.slice(0, 5) : newArrivals.slice(0, 5)).length > 0
-              ? (bestSellingProducts.length ? bestSellingProducts.slice(0, 5) : newArrivals.slice(0, 5)).map(product => <WoodistryBestSellerCard product={product} key={product.id || product._id || product.slug}/>)
+            {bestSellerDisplayProducts.length > 0
+              ? bestSellerDisplayProducts.map(product => <WoodistryBestSellerCard product={product} key={product.id || product._id || product.slug || product.name}/>)
               : woodistrySampleProducts.map(product => <article className="wood-demo-product" key={product.name}><Link to="/shop" className="wood-demo-image"><WoodistryImage className="wood-demo-product-image" src={product.image} alt={product.name} loading="lazy"/><span className="wood-demo-heart"><Heart size={19}/></span><span className="wood-demo-quick">Explore collection</span></Link><Link to="/shop" className="wood-demo-name">{product.name}</Link><p>{product.material}</p><strong>{product.price}</strong></article>)}
           </div></div>
         </section>
@@ -1086,7 +1413,7 @@ function Home() {
         <section className="wood-durability-section" data-xaaj-reveal="up" aria-labelledby="wood-durability-title">
           <style>{`
             .wood-durability-section {
-              --durability-paper: #eee7dc;
+              --durability-paper: #efedeb;
               --durability-ink: #29231d;
               --durability-muted: #6f665b;
               --durability-line: #d2c3b0;
@@ -1383,7 +1710,7 @@ function Home() {
           <style>{`
             .wood-brand-story { background:#eee7dc; color:#29231d; } .wood-auth-visual-image-shell { position:absolute; inset:0; width:100%; height:100%; } .wood-auth-visual-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
             .wood-space-card { position:relative; overflow:hidden; }
-            .wood-space-card .wood-space-card-image { position:absolute; inset:0; width:100%; height:100%; min-height:100%; }
+            .wood-space-card .wood-space-card-image { position:absolute; inset:0; width:100%; height:100%; min-height:100%; } .wood-space-card .wood-space-card-image.woodistry-image-shell { display:block; min-height:0; }
             .wood-space-card .wood-space-card-image .woodistry-image-content { transition:opacity .55s ease,transform .8s cubic-bezier(.2,.65,.3,1); }
             .wood-space-card:hover .wood-space-card-image .woodistry-image-content { transform:scale(1.04); }
             .wood-hero-image-shell { position:absolute; inset:0; width:100%; height:100%; opacity:0; transition:opacity .65s ease; } .wood-hero-image-shell.is-active { opacity:1; } .wood-hero-image { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; } .wood-hero-image-shell .woodistry-image-shimmer { z-index:0; } .woodistry-image-shell { position:relative; display:block; width:100%; height:100%; min-height:inherit; overflow:hidden; background:#e9e1d5; isolation:isolate; }
@@ -2314,14 +2641,14 @@ function Footer() {
               <a href="https://wa.me/919899446117" target="_blank" rel="noreferrer" aria-label="WhatsApp" title="WhatsApp"><FaWhatsapp size={18} /></a>
             </div>
           </div>
-          <nav className="wood-footer-column" aria-label="Explore">
+          <nav className="wood-footer-column" aria-label="Explore Woodistry">
             <span className="wood-footer-kicker">Explore</span>
-            <Link to="/shop">Shop all</Link>
+            <Link to="/shop">Shop all products</Link>
+            <Link to="/shop?category=Dining%20%26%20Serving">Dining &amp; Serving</Link>
+            <Link to="/shop?category=Kitchen%20Essentials">Kitchen Essentials</Link>
+            <Link to="/shop?category=Storage%20%26%20Containers">Storage &amp; Containers</Link>
             <Link to="/shop?filter=new">New arrivals</Link>
-            <Link to="/shop?category=Living%20Room">Living room</Link>
-            <Link to="/shop?category=Dining">Dining</Link>
-            <Link to="/shop?category=Bedroom">Bedroom</Link>
-            <Link to="/about">Our story</Link>
+            <Link to="/about">Our Story</Link>
           </nav>
           <nav className="wood-footer-column" aria-label="Customer care">
             <span className="wood-footer-kicker">Customer care</span>
@@ -2361,8 +2688,12 @@ function ShopProductCard({ product }) {
   const productId = product.id || product._id
   const liked = wish.includes(productId)
   const image = product.image || product.images?.[0] || ''
-  const oldPrice = Number(product.old || product.compareAtPrice || 0)
+  const oldPrice = Number(product.mrp ?? product.old ?? product.compareAtPrice ?? 0)
   const price = Number(product.price || 0)
+  const showDiscount =
+    (product.showDiscountPercent === true || product.showDiscountToCustomers === true) &&
+    oldPrice > price &&
+    oldPrice > 0
 
   const handleAdd = event => {
     event.preventDefault()
@@ -2407,10 +2738,14 @@ function ShopProductCard({ product }) {
       </div>
       <div className="wood-shop-product-copy">
         {product.category && <span className="wood-shop-product-category">{product.category}</span>}
+        {(product.subcategory || product.subCategory) && (
+          <span className="wood-shop-product-subcategory">{product.subcategory || product.subCategory}</span>
+        )}
         <Link to={`/product/${product.slug}`} className="wood-shop-product-name">{product.name}</Link>
         <div className="wood-shop-product-price">
           <strong>{money(price)}</strong>
-          {oldPrice > price && <del>{money(oldPrice)}</del>}
+          {showDiscount && <del>{money(oldPrice)}</del>}
+          {showDiscount && <span className="wood-shop-product-discount">{Math.round(((oldPrice - price) / oldPrice) * 100)}% off</span>}
         </div>
       </div>
     </article>
@@ -2475,7 +2810,7 @@ const WOODISTRY_SHOP_CARD_CSS = `
 .wood-shop-page .wood-shop-product-name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .wood-shop-page .wood-shop-product-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin-top: 1px; }
 .wood-shop-page .wood-shop-product-price strong { color: #292823; font: 500 12px/1.4 var(--wood-sans); }
-.wood-shop-page .wood-shop-product-price del { color: #999186; font: 400 10px/1.4 var(--wood-sans); }
+.wood-shop-page .wood-shop-product-price del { color: #999186; font: 400 10px/1.4 var(--wood-sans); }\n.wood-shop-page .wood-shop-product-subcategory { display:block; margin-top:3px; color:#827b70; font:400 10px/1.4 var(--wood-sans); }\n.wood-shop-page .wood-shop-product-discount { color:#765b3f; font:500 10px/1.4 var(--wood-sans); }
 @media (max-width: 900px) {
   .wood-shop-page .wood-shop-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px 15px; }
 }
@@ -2499,16 +2834,15 @@ function Shop() {
   const query = new URLSearchParams(location.search)
   const [sort, setSort] = useState('featured')
   const category = query.get('category') || ''
+  const subcategory = query.get('subcategory') || ''
   const search = query.get('search') || ''
+  const filter = query.get('filter') || ''
 
   const shopCategories = [
-    { label: 'All Furniture', value: '' },
-    { label: 'Living Room', value: 'Living Room' },
-    { label: 'Sofas & Chairs', value: 'Sofas & Chairs' },
-    { label: 'Dining', value: 'Dining' },
-    { label: 'Bedroom', value: 'Bedroom' },
-    { label: 'Tables', value: 'Tables' },
-    { label: 'Storage', value: 'Storage' }
+    { label: 'All Products', value: '' },
+    { label: 'Dining & Serving', value: 'Dining & Serving' },
+    { label: 'Kitchen Essentials', value: 'Kitchen Essentials' },
+    { label: 'Storage & Containers', value: 'Storage & Containers' }
   ]
 
   const normalized = value => String(value || '').trim().toLowerCase()
@@ -2517,26 +2851,55 @@ function Shop() {
     const target = normalized(selected)
     const fields = [
       product.category, product.room, product.collection,
-      product.subcategory, product.type, product.name
+      product.subcategory, product.subCategory, product.type, product.productType,
+      product.name, product.title,
+      ...(Array.isArray(product.tags) ? product.tags : [product.tags])
     ].map(normalized).filter(Boolean)
     if (fields.some(value => value.includes(target))) return true
 
+    // Map each website menu label to the wording commonly found in product names/categories.
+    // This lets the menu work even when catalogue naming varies slightly.
     const aliases = {
-      'living room': ['living', 'sofa', 'chair', 'coffee table', 'sideboard', 'lounge'],
-      'sofas & chairs': ['sofa', 'chair', 'armchair', 'lounge'],
-      'dining': ['dining', 'dining table', 'dining chair'],
-      'bedroom': ['bedroom', 'bed', 'nightstand', 'dresser'],
-      'tables': ['table', 'desk', 'coffee table', 'side table'],
-      'storage': ['storage', 'cabinet', 'sideboard', 'shelf', 'bookcase']
+      'dining & serving': ['serving tray', 'tray', 'platter', 'cake stand', 'coaster', 'cup', 'mug', 'salad bowl', 'bowl', 'napkin holder'],
+      'kitchen essentials': ['spice box', 'spice', 'chopping board', 'cutting board', 'mortar', 'pestle', 'spoon', 'utensil', 'cutlery holder', 'kitchen organiser', 'kitchen organizer', 'kitchen rack', 'organiser', 'organizer'],
+      'storage & containers': ['dry fruit', 'casserole', 'bowl', 'jar', 'basket'],
+      'serving trays': ['tray'],
+      'serving platters': ['serving platter', 'leaf serving platter', 'serving platter with'],
+      'platters': ['platter'],
+      'cake stands': ['cake stand'],
+      'tea coasters': ['coaster'],
+      'cups & mugs': ['cup', 'mug'],
+      'salad bowls': ['salad bowl', 'bowl'],
+      'napkin holders': ['napkin holder', 'tissue holder'],
+      'spice boxes': ['spice box', 'spice'],
+      'spice box products': ['spice box', 'spice'],
+      'chopping boards': ['chopping board', 'cutting board'],
+      'mortar & pestle': ['mortar', 'pestle'],
+      'serving & cooking spoons': ['serving spoon', 'cooking spoon', 'spoon', 'utensil'],
+      'cutlery holders': ['cutlery holder', 'cutlery stand', 'spoon holder', 'utensil holder'],
+      'kitchen organisers': ['kitchen organiser', 'kitchen organizer', 'kitchen rack', 'organiser', 'organizer'],
+      'dry fruit boxes': ['dry fruit box', 'dry fruits box', 'dry fruit', 'dry fruits'],
+      'bowls & jars': ['bowl', 'jar'],
+      'refreshment jars': ['refreshment jar', 'jar'],
+      'casseroles': ['casserole'],
+      'folding & fruit baskets': ['basket']
     }
-    return (aliases[target] || []).some(alias =>
-      fields.some(value => value.includes(alias))
-    )
+    return (aliases[target] || []).some(alias => fields.some(value => value.includes(alias)))
+  }
+
+  const subcategoryMatches = (product, selected) => {
+    if (!selected) return true
+    const target = normalized(selected)
+    const assigned = normalized(product.subcategory || product.subCategory || product.sub_category)
+    if (assigned) return assigned === target || assigned.includes(target) || target.includes(assigned)
+    // Older catalogue items may not have subcategory saved yet; use their name/tags as a fallback.
+    return categoryMatches(product, selected)
   }
 
   const originalProducts = Array.isArray(liveProducts) ? liveProducts : []
   let list = originalProducts.filter(product =>
     categoryMatches(product, category) &&
+    subcategoryMatches(product, subcategory) &&
     (!search || normalized(product.name).includes(normalized(search)) ||
       normalized(product.description || product.desc || product.shortDescription).includes(normalized(search)))
   )
@@ -2589,7 +2952,17 @@ function Shop() {
       break
   }
 
-  const heading = category || (search ? `Search: ${search}` : 'Furniture for considered living')
+  // Header shortcuts are functional: sort the current catalogue for these views.
+  if (filter === 'new') list = [...list].sort((a, b) => dateValue(b) - dateValue(a))
+  if (filter === 'best-selling') list = [...list].sort((a, b) => soldValue(b) - soldValue(a))
+
+  const heading = subcategory || category || (search
+    ? `Search: ${search}`
+    : filter === 'new'
+      ? 'New Arrivals'
+      : filter === 'best-selling'
+        ? 'Best Sellers'
+        : 'All Products')
 
   return (
     <>
@@ -2600,13 +2973,14 @@ function Shop() {
           <div className="breadcrumbs">
             <Link to="/">Home</Link><span>/</span><span>Shop</span>
             {category && <><span>/</span><span>{category}</span></>}
+            {subcategory && <><span>/</span><span>{subcategory}</span></>}
           </div>
 
           <div className="shop-title wood-shop-title">
             <div>
               <span className="eyebrow">THE WOODISTRY COLLECTION</span>
               <h1>{heading}</h1>
-              <p>Thoughtfully crafted furniture. Natural materials. Pieces made to feel at home.</p>
+              <p>Thoughtfully crafted wooden essentials for everyday dining, serving, and kitchen rituals.</p>
             </div>
             <label className="wood-shop-sort-label">
               <span className="wood-shop-sort-caption">Sort by:</span>
@@ -2624,11 +2998,11 @@ function Shop() {
             </label>
           </div>
 
-          <nav className="filter-row wood-shop-filters" aria-label="Furniture categories">
+          <nav className="filter-row wood-shop-filters" aria-label="Product categories">
             {shopCategories.map(item => {
               const active = item.value
-                ? normalized(category) === normalized(item.value)
-                : !category
+                ? !subcategory && normalized(category) === normalized(item.value)
+                : !category && !subcategory
               return (
                 <Link
                   className={active ? 'active' : ''}
@@ -2643,8 +3017,8 @@ function Shop() {
           </nav>
 
           <div className="wood-shop-result-count">
-            {list.length} {list.length === 1 ? 'piece' : 'pieces'}
-            {category ? ` in ${category}` : ' in the collection'}
+            {list.length} {list.length === 1 ? 'product' : 'products'}
+            {subcategory ? ` in ${subcategory}` : category ? ` in ${category}` : ' in the collection'}
           </div>
 
           <div id="shop-products" className="product-grid shop-grid wood-shop-grid" style={{ scrollMarginTop: '120px' }}>
@@ -2653,11 +3027,11 @@ function Shop() {
             )) : (
               <div className="wood-shop-empty">
                 <span className="eyebrow">A little room to explore</span>
-                <h2>{search ? 'No pieces found' : 'No furniture in this collection yet'}</h2>
+                <h2>{search ? 'No pieces found' : 'No products in this collection yet'}</h2>
                 <p>{search
                   ? 'Try another search term or browse the full Woodistry collection.'
-                  : 'This collection is being curated. Explore all furniture to discover the pieces currently available.'}</p>
-                <Link className="wood-shop-reset" to="/shop">Explore all furniture <ArrowRight size={15} /></Link>
+                  : 'This collection is being curated. Explore all products to discover the pieces currently available.'}</p>
+                <Link className="wood-shop-reset" to="/shop">Explore all products <ArrowRight size={15} /></Link>
               </div>
             )}
           </div>
@@ -2903,7 +3277,7 @@ function Product() {
             <div className="detail-copy">
 
               <span className="eyebrow">
-                {product.category}
+                {[product.category, product.subcategory || product.subCategory].filter(Boolean).join(' / ')}
               </span>
 
               <h1>
@@ -2920,17 +3294,20 @@ function Product() {
                 )}
               />
 
-              {/* Selling Price + MRP */}
+              {/* Selling price is always visible; MRP and discount are opt-in customer displays. */}
               <div className="detail-price">
-                <strong>
-                  {money(product.price)}
-                </strong>
-
-                {Number(product.old || 0) > Number(product.price || 0) && (
-                  <del style={{ marginLeft: '10px' }}>
-                    MRP {money(product.old)}
-                  </del>
-                )}
+                <strong>{money(product.price)}</strong>
+                {(product.showDiscountPercent === true || product.showDiscountToCustomers === true) &&
+                  Number(product.old ?? product.mrp ?? product.compareAtPrice ?? 0) > Number(product.price || 0) && (
+                    <>
+                      <del style={{ marginLeft: '10px' }}>
+                        MRP {money(product.old ?? product.mrp ?? product.compareAtPrice)}
+                      </del>
+                      <span className="detail-discount-badge" style={{ marginLeft: '10px' }}>
+                        {Math.round(((Number(product.old ?? product.mrp ?? product.compareAtPrice) - Number(product.price || 0)) / Number(product.old ?? product.mrp ?? product.compareAtPrice)) * 100)}% off
+                      </span>
+                    </>
+                  )}
               </div>
 
               {/* Main Product Description */}
@@ -8192,7 +8569,20 @@ if (path === '/account') {
 
 
 // Woodistry styles are embedded here so App.jsx is self-contained.
-const WOODISTRY_CSS = "@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600&display=swap');\n\n:root{--wood-paper:#f5f2ec;--wood-white:#fbf9f5;--wood-ink:#292823;--wood-muted:#716b62;--wood-line:#ded8ce;--wood-serif:'Playfair Display',Georgia,serif;--wood-sans:'DM Sans',Arial,sans-serif}\nbody{font-family:var(--wood-sans);color:var(--wood-ink);background:var(--wood-paper)}\n.wood-announcement{height:35px;background:#292821;color:#f8f5ef;display:flex;align-items:center;justify-content:center;gap:13px;padding:0 5.8%;font-size:10px;letter-spacing:.01em;position:relative;z-index:1001}\n.wood-announcement i{height:13px;width:1px;background:#827e74}.wood-announcement-right{position:absolute;right:5.8%;display:flex;gap:28px;color:#d4d0c8}\n.wood-header{height:63px;background:#fbf9f5;border-bottom:1px solid #e4dfd7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 5.8%;position:sticky;top:0;z-index:1000;color:var(--wood-ink)}\n.wood-wordmark{justify-self:start;display:flex;align-items:center;justify-content:flex-start;text-decoration:none!important;color:var(--wood-ink)!important;width:clamp(150px,17vw,245px);height:54px;white-space:nowrap;overflow:hidden}.wood-wordmark img{display:block;max-width:100%;width:100%;height:100%;object-fit:contain;object-position:left center}.wood-wordmark-text{display:none;font-size:22px;letter-spacing:.23em;font-weight:500;white-space:nowrap}\n.wood-nav{display:flex;align-items:center;gap:clamp(17px,2.2vw,36px);height:100%}.wood-nav>a{height:100%;display:flex;align-items:center;gap:5px;text-decoration:none;color:var(--wood-ink);font-size:12px;white-space:nowrap;transition:opacity .2s}.wood-nav>a:hover{opacity:.58}\n.wood-header-actions{justify-self:end;display:flex;align-items:center;gap:18px}.wood-header-actions button,.wood-mobile-menu{border:0;background:transparent;color:inherit;padding:3px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.wood-header-actions button:hover{opacity:.6}.wood-action-search{gap:8px!important;font-size:12px}.wood-bag{position:relative}.wood-bag b{position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;border-radius:50%;background:#292823;color:#fff;font-size:9px;font-weight:500;display:grid;place-items:center}.wood-mobile-menu{display:none}\n.wood-mega-menu{position:absolute;top:100%;left:0;width:100%;min-height:280px;background:#f8f5ef;box-shadow:0 18px 32px #211e1714;border-top:1px solid #e9e3da;display:grid;grid-template-columns:.8fr 1fr 1fr;gap:38px;padding:38px 12.2% 36px;z-index:1005}.wood-mega-links{display:flex;flex-direction:column;align-items:flex-start;gap:15px}.wood-mega-links>a{font-size:12px;text-decoration:none;color:var(--wood-ink);text-transform:uppercase;letter-spacing:.07em}.wood-kicker{display:block;font-size:10px;line-height:1.4;letter-spacing:.22em;text-transform:uppercase;font-weight:700;color:#756e62}.wood-mega-feature{display:grid;grid-template-columns:42% 1fr;gap:16px;align-items:center;text-decoration:none;color:var(--wood-ink);min-width:0}.wood-mega-feature img{width:100%;height:126px;object-fit:cover}.wood-mega-feature span{display:flex;flex-direction:column;align-items:flex-start;gap:8px}.wood-mega-feature small{font-size:9px;letter-spacing:.16em}.wood-mega-feature strong{font:500 22px/1.1 var(--wood-serif)}.wood-mega-feature em{font-size:11px;font-style:normal}.wood-mega-close{position:absolute;top:20px;right:5.8%;border:0;background:none;cursor:pointer}\n.wood-search-panel{position:sticky;top:63px;z-index:999;background:#fbf9f5;padding:18px 6%;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--wood-line)}.wood-search-panel input{flex:1;border:0;border-bottom:1px solid var(--wood-line);background:transparent;padding:12px 4px;font:14px var(--wood-sans);outline:none}.wood-search-panel button{display:flex;align-items:center;gap:8px;border:0;background:transparent;cursor:pointer;font-size:12px}\n.wood-home{background:var(--wood-paper);overflow:hidden}.wood-hero{height:440px;min-height:0;position:relative;overflow:hidden;background:#777064;color:#fff}.wood-hero-media,.wood-hero-shade{position:absolute;inset:0}.wood-hero-media img,.wood-hero-media video{position:absolute;width:100%;height:100%;inset:0;object-fit:cover;opacity:0;transition:opacity .9s ease;display:block}.wood-hero-media img.is-active,.wood-hero-media video.is-active{opacity:1}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.68) 0%,rgba(25,23,19,.43) 32%,rgba(25,23,19,.08) 70%,rgba(25,23,19,0) 100%)}.wood-hero-copy{position:absolute;top:50%;left:9.6%;transform:translateY(-51%);max-width:540px}.wood-hero-copy .wood-kicker{color:#fff;font-size:10px;letter-spacing:.24em;margin-bottom:17px}.wood-hero-copy h1{font:400 clamp(54px,5.1vw,78px)/.96 var(--wood-serif);letter-spacing:-.055em;margin:0 0 24px;color:#fff}.wood-hero-copy p{font-size:15px;line-height:1.75;margin:0 0 23px;color:#f4f0e9}.wood-primary-button{display:inline-flex;align-items:center;gap:26px;padding:16px 19px;background:#fbf9f5;color:#292823;text-decoration:none;font-size:12px;min-height:48px;transition:background .25s,color .25s}.wood-primary-button:hover{background:#292823;color:#fff}.wood-hero-pagination{position:absolute;left:9.6%;right:9.6%;bottom:22px;display:flex;align-items:center;justify-content:flex-end}.wood-hero-numbers{display:flex;align-items:center;gap:24px}.wood-hero-numbers button{border:0;background:transparent;color:#fff;padding:4px 0;font:11px var(--wood-sans);cursor:pointer;opacity:.72;position:relative}.wood-hero-numbers button.active{opacity:1}.wood-hero-numbers button.active:after{content:'';position:absolute;left:29px;top:50%;width:24px;height:1px;background:#fff}.wood-hero-arrows{display:flex;gap:8px}.wood-hero-arrows button{width:40px;height:40px;border:1px solid #ffffff9c;border-radius:50%;color:#fff;background:transparent;font-size:19px;cursor:pointer;transition:background .2s}.wood-hero-arrows button:hover{background:#ffffff2b}\n.wood-space-section{padding:20px 5.8% 64px;display:grid;grid-template-columns:clamp(205px,14.2vw,290px) minmax(0,1fr);gap:40px;align-items:center;min-width:0}.wood-section-intro{min-width:0;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;padding-block:2px;margin-top:0}.wood-section-intro h2,.wood-products-intro h2,.wood-mobile-section-heading h2{font:500 32px/1.12 var(--wood-serif);letter-spacing:-.04em;margin:0 0 13px}.wood-section-intro p,.wood-products-intro p{font-size:13px;line-height:1.65;color:var(--wood-muted);margin:0 0 22px}.wood-section-intro>a,.wood-products-intro>a,.wood-mobile-section-heading>a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--wood-ink);font-size:11px;border-bottom:1px solid #777064;padding-bottom:6px}.wood-space-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.wood-space-card{height:clamp(190px,13.8vw,285px);position:relative;overflow:hidden;display:block;background:#d5cec2;color:#fff;text-decoration:none}.wood-space-card:after{content:'';position:absolute;inset:30% 0 0;background:linear-gradient(transparent,rgba(22,20,17,.58))}.wood-space-card img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s cubic-bezier(.2,.7,.2,1)}.wood-space-card:hover img{transform:scale(1.045)}.wood-space-card>span{position:absolute;z-index:1;left:16px;bottom:16px;display:flex;align-items:center;gap:7px;font:500 clamp(18px,1.65vw,25px)/1 var(--wood-serif);color:#fff}.wood-space-card>span svg{stroke-width:1.5}\n.wood-products-section{padding:5px 5.8% 82px;display:grid;grid-template-columns:205px minmax(0,1fr);gap:40px}.wood-products-intro{padding-top:4px}.wood-products-content{min-width:0}.wood-product-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px 16px;align-items:start}.wood-product-grid .product-card{min-width:0;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible;display:flex;flex-direction:column}.wood-product-grid .product-image{position:relative;aspect-ratio: .78 / 1;overflow:hidden;background:#e4dfd7;border-radius:0;margin:0}.wood-product-grid .product-image-link{display:block;width:100%;height:100%;position:absolute;inset:0}.wood-product-grid .product-image-primary,.wood-product-grid .product-image-secondary{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .45s ease,transform .7s ease}.wood-product-grid .product-image-primary{position:relative}.wood-product-grid .product-image-secondary{position:absolute;inset:0;opacity:0}.wood-product-grid .product-card:hover .product-image-primary{transform:scale(1.025)}.wood-product-grid .product-card:hover .product-image-secondary{opacity:1}.wood-product-grid .heart{position:absolute;top:12px;right:12px;width:30px;height:30px;border:0;background:transparent;color:#292823;padding:4px;z-index:2}.wood-product-grid .heart svg{width:20px;height:20px}.wood-product-grid .heart-tooltip{display:none}.wood-product-grid .product-image-bottom-spacer{display:none}.wood-product-grid .product-copy{padding:11px 0 0;display:flex;flex-direction:column;gap:4px}.wood-product-grid .product-meta{display:none}.wood-product-grid .product-title-link{text-decoration:none;color:var(--wood-ink)}.wood-product-grid .product-title-link h3{font:400 13px/1.4 var(--wood-sans);margin:0;color:var(--wood-ink)}.wood-product-grid .product-description{font-size:11px;line-height:1.4;color:#827b70;margin:0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.wood-product-grid .rating{display:none}.wood-product-grid .product-bottom-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:1px}.wood-product-grid .price{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.wood-product-grid .price strong{font-size:12px;font-weight:500;color:var(--wood-ink)}.wood-product-grid .price del,.wood-product-grid .save-badge{display:none}.wood-product-grid .add{border:1px solid #d4cec4;background:transparent;color:var(--wood-ink);border-radius:0;min-height:30px;padding:5px 8px;font-size:10px;opacity:0;transition:opacity .2s,background .2s;white-space:nowrap}.wood-product-grid .product-card:hover .add,.wood-product-grid .add:focus{opacity:1}.wood-product-grid .add:hover{background:var(--wood-ink);color:#fff}.wood-product-grid .add-label{font-size:10px}.wood-product-grid .add-icon,.wood-product-grid .add-shine{display:none}.wood-empty-products{grid-column:1/-1;color:var(--wood-muted);font-size:13px;padding:35px 0}.wood-mobile-section-heading{display:none}\n.wood-editorial{display:grid;grid-template-columns:.78fr 1.22fr;min-height:470px;background:#e9e3d9}.wood-editorial-copy{padding:70px clamp(30px,8vw,120px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center}.wood-editorial-copy h2{font:400 clamp(42px,4.5vw,65px)/1.02 var(--wood-serif);letter-spacing:-.05em;margin:18px 0 20px}.wood-editorial-copy h2 em{font-weight:400;color:#8d6f54}.wood-editorial-copy p{max-width:390px;font-size:13px;line-height:1.85;color:#716b62;margin:0 0 24px}.wood-outline-button{display:inline-flex;align-items:center;gap:18px;padding:13px 17px;border:1px solid #a9a094;color:var(--wood-ink);text-decoration:none;font-size:11px}.wood-outline-button:hover{background:#292823;color:#fff;border-color:#292823}.wood-editorial-image{min-height:420px;overflow:hidden}.wood-editorial-image img{width:100%;height:100%;object-fit:cover;display:block}.wood-service-strip{padding:30px 5.8%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;border-bottom:1px solid var(--wood-line)}.wood-service-strip>div{display:flex;align-items:center;justify-content:center;gap:13px}.wood-service-strip svg{flex-shrink:0;stroke-width:1.25}.wood-service-strip span{display:flex;flex-direction:column;gap:4px}.wood-service-strip strong{font-size:11px;font-weight:600}.wood-service-strip small{font-size:10px;color:var(--wood-muted)}\n/* Footer keeps the original links and newsletter integrations, with the new visual language. */\n.footer{background:#292823!important;color:#f6f2ea!important;padding-top:54px!important}.footer .footer-main{max-width:none!important;padding-left:5.8%!important;padding-right:5.8%!important}.footer .wood-footer-wordmark{display:flex!important;flex-direction:column;align-items:flex-start;gap:12px;text-decoration:none!important;color:#f6f2ea!important}.footer .wood-footer-wordmark span{font-size:21px;letter-spacing:.2em;font-weight:500}.footer .footer-main h4{font-size:11px!important;letter-spacing:.14em;text-transform:uppercase}.footer a{color:inherit}.footer .footer-bottom{padding-left:5.8%!important;padding-right:5.8%!important}\n/* Reuse the existing newsletter and content pages without changing their data flow. */\n.newsletter{background:#e9e3d9!important;color:var(--wood-ink)!important}.newsletter .eyebrow{color:#796d5d!important}.newsletter h2{font-family:var(--wood-serif)!important}.newsletter form input{border-radius:0!important}.newsletter form button{border-radius:0!important}\n@media(max-width:1100px){.wood-header{padding:0 3.5%}.wood-wordmark{font-size:19px;letter-spacing:.18em}.wood-wordmark-text{font-size:19px;letter-spacing:.18em}.wood-nav{gap:14px}.wood-nav>a{font-size:11px}.wood-header-actions{gap:12px}.wood-space-section,.wood-products-section{padding-left:4%;padding-right:4%;grid-template-columns:170px minmax(0,1fr);gap:25px}.wood-product-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.wood-product-grid .product-card:nth-child(n+5){display:none}.wood-announcement-right{right:3.5%}}\n@media(max-width:780px){.wood-announcement{height:32px;font-size:9px;padding:0 12px;gap:8px}.wood-announcement-right{display:none}.wood-header{height:62px;padding:0 18px;grid-template-columns:36px 1fr auto;gap:10px}.wood-mobile-menu{display:inline-flex;justify-self:start}.wood-wordmark{justify-self:center;width:clamp(120px,38vw,170px);font-size:18px;letter-spacing:.18em}.wood-wordmark img{object-position:center}.wood-wordmark-text{font-size:18px;letter-spacing:.18em}.wood-nav{display:none;position:absolute;top:100%;left:0;right:0;height:auto;background:#fbf9f5;padding:12px 22px 24px;box-shadow:0 16px 20px #211e1714;align-items:stretch;flex-direction:column;gap:0}.wood-nav.is-open{display:flex}.wood-nav>a{min-height:47px;border-bottom:1px solid #e9e3da;justify-content:space-between;font-size:13px}.wood-header-actions{gap:11px}.wood-action-search span{display:none}.wood-header-actions button svg{width:19px;height:19px}.wood-header-actions button:first-child{display:inline-flex}.wood-header-actions button:nth-child(2){display:none}.wood-bag b{top:-6px;right:-6px}.wood-mega-menu{display:none}.wood-search-panel{top:62px;padding:12px 18px;gap:10px}.wood-search-panel input{min-width:0}.wood-hero{height:615px;min-height:0;max-height:none}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.62),rgba(25,23,19,.12)),linear-gradient(0deg,rgba(25,23,19,.28),transparent 50%)}.wood-hero-copy{left:7%;right:6%;top:49%;max-width:460px}.wood-hero-copy h1{font-size:clamp(52px,12vw,72px)}.wood-hero-copy p{font-size:13px}.wood-hero-pagination{left:7%;right:7%;bottom:18px}.wood-space-section{padding:42px 18px 48px;display:block}.wood-section-intro{display:grid;grid-template-columns:1fr auto;align-items:end;margin-bottom:20px}.wood-section-intro h2{font-size:29px;margin:0}.wood-section-intro p{grid-column:1;grid-row:2;margin:8px 0 0;font-size:12px}.wood-section-intro>a{grid-column:2;grid-row:1/3;align-self:end}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.wood-space-card{height:clamp(175px,51vw,260px)}.wood-space-card>span{left:12px;bottom:13px;font-size:21px}.wood-products-section{padding:5px 18px 55px;display:block}.wood-products-intro{display:none}.wood-mobile-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.wood-mobile-section-heading h2{font-size:29px;margin:0}.wood-mobile-section-heading>a{font-size:11px}.wood-product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 12px}.wood-product-grid .product-card:nth-child(n+5){display:flex}.wood-product-grid .product-image{aspect-ratio:.79/1}.wood-product-grid .product-copy{padding-top:9px}.wood-product-grid .product-title-link h3{font-size:12px}.wood-product-grid .product-description{font-size:10px}.wood-product-grid .price strong{font-size:12px}.wood-product-grid .add{opacity:1;padding:5px 6px;min-height:27px}.wood-product-grid .add-label{font-size:9px}.wood-product-grid .heart{top:8px;right:8px}.wood-editorial{grid-template-columns:1fr}.wood-editorial-copy{padding:48px 24px 42px;order:2}.wood-editorial-copy h2{font-size:48px}.wood-editorial-image{min-height:290px;height:65vw;order:1}.wood-service-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:23px 12px;padding:25px 18px}.wood-service-strip>div{justify-content:flex-start;gap:10px}.wood-service-strip svg{width:20px}.wood-service-strip strong{font-size:10px}.wood-service-strip small{font-size:9px}.footer .footer-main{padding-left:22px!important;padding-right:22px!important}.footer .footer-bottom{padding-left:22px!important;padding-right:22px!important}.footer .wood-footer-wordmark span{font-size:18px}}\n@media(max-width:390px){.wood-wordmark{font-size:15px;letter-spacing:.16em}.wood-wordmark-text{font-size:15px;letter-spacing:.16em}.wood-header-actions{gap:8px}.wood-header-actions button svg{width:18px;height:18px}.wood-hero{height:540px}.wood-hero-copy h1{font-size:49px}.wood-space-card>span{font-size:18px}.wood-product-grid .product-bottom-row{align-items:flex-start;flex-direction:column}.wood-product-grid .add{width:100%}.wood-service-strip{grid-template-columns:1fr 1fr}}\n.wood-demo-product{min-width:0;display:flex;flex-direction:column;align-items:stretch}.wood-demo-image{aspect-ratio:.78/1;position:relative;display:block;overflow:hidden;background:#e4dfd7;color:var(--wood-ink)}.wood-demo-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s ease}.wood-demo-product:hover .wood-demo-image img{transform:scale(1.035)}.wood-demo-heart{position:absolute;right:12px;top:12px}.wood-demo-quick{position:absolute;bottom:0;left:0;right:0;padding:11px 6px;text-align:center;background:#fbf9f5eF;color:var(--wood-ink);font-size:11px;transform:translateY(100%);transition:transform .25s}.wood-demo-product:hover .wood-demo-quick{transform:translateY(0)}.wood-demo-name{margin-top:11px;font-size:13px;line-height:1.4;text-decoration:none;color:var(--wood-ink)}.wood-demo-product p{margin:3px 0 5px;font-size:11px;color:#827b70}.wood-demo-product>strong{font-size:12px;font-weight:500}@media(max-width:780px){.wood-demo-heart{top:8px;right:8px}.wood-demo-name{font-size:12px}.wood-demo-quick{transform:none;font-size:10px;padding:8px 4px}}\n@media(min-width:781px){.wood-hero{height:440px;min-height:0}.wood-space-section{padding-top:24px}.wood-section-intro{overflow:visible;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;margin:0 0 13px;padding:2px 0}}\n/* Homepage Best Sellers: clean editorial product layout matching the Oak Lounge reference. */\n.wood-product-grid .wood-home-product{min-width:0;display:flex;flex-direction:column;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible}\n/* Best Sellers image ratio matches reference: 206 x 265 */.wood-product-grid .wood-home-product-image{position:relative;width:100%;aspect-ratio:206/265;height:auto;min-height:0;overflow:hidden;background:#e4dfd7;border-radius:0}\n.wood-product-grid .wood-home-product-image>a{position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden}\n.wood-product-grid .wood-home-product-image img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .65s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-image img{transform:scale(1.045)}\n.wood-product-grid .wood-home-product-quick{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 8px;background:rgba(251,249,245,.94);color:var(--wood-ink);font-size:12px;letter-spacing:.01em;transform:translateY(101%);opacity:0;transition:transform .28s ease,opacity .28s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-quick,.wood-product-grid .wood-home-product:focus-within .wood-home-product-quick{transform:translateY(0);opacity:1}\n.wood-product-grid .wood-home-product-image-link:focus-visible{outline:2px solid var(--wood-ink);outline-offset:-3px}\n.wood-product-grid .wood-home-product-heart{position:absolute;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:0;background:transparent;color:#292823;cursor:pointer}\n.wood-product-grid .wood-home-product-details{padding:11px 0 0;min-width:0}\n.wood-product-grid .wood-home-product-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}\n.wood-product-grid .wood-home-product-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;color:var(--wood-ink);font-size:13px;line-height:1.4}\n.wood-product-grid .wood-home-product-price{flex-shrink:0;color:var(--wood-ink);font-size:12px;font-weight:500;white-space:nowrap}\n.wood-product-grid .wood-home-product-material{margin:7px 0 0;color:#827b70;font-size:11px;line-height:1.4}\n@media(max-width:780px){.wood-product-grid .wood-home-product-image{aspect-ratio:.78/1}.wood-product-grid .wood-home-product-heart{top:8px;right:8px}.wood-product-grid .wood-home-product-name{font-size:12px}.wood-product-grid .wood-home-product-price{font-size:12px}.wood-product-grid .wood-home-product-material{font-size:10px;margin-top:5px}.wood-product-grid .wood-home-product-title-row{gap:5px}}\n\n\n\n/* WOODISTRY SHOP COLLECTION */\n.wood-shop-sort-label{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:220px;color:#292823;font-family:var(--wood-sans)}\n.wood-shop-sort-caption{flex:0 0 auto;font-size:12px;color:#716b62}\n.wood-shop-sort-label select{appearance:auto;min-width:170px;max-width:100%;padding:10px 26px 10px 2px;border:0;border-bottom:1px solid #292823;border-radius:0;background:transparent;color:#292823;font:400 13px/1.4 var(--wood-sans);cursor:pointer;outline-offset:4px}\n.wood-shop-sort-label select:focus-visible{outline:1px solid #8d806e}\n.wood-shop-page .breadcrumbs a{color:inherit;text-decoration:none}\n.wood-shop-title{align-items:flex-end;gap:32px}\n.wood-shop-title h1{max-width:900px}\n.wood-shop-title p{max-width:620px}\n.wood-shop-sort-label select{min-width:170px}\n.wood-shop-filters{display:flex;gap:30px;align-items:center;overflow-x:auto;white-space:nowrap;scrollbar-width:none}\n.wood-shop-filters::-webkit-scrollbar{display:none}\n.wood-shop-filters a{flex:0 0 auto;text-decoration:none}\n.wood-shop-filters a.active{color:#292824;border-bottom-color:#292824}\n.wood-shop-result-count{margin:22px 0 18px;color:#777167;font-size:12px;letter-spacing:.04em}\n.wood-shop-grid{align-items:start}\n.wood-shop-empty{grid-column:1/-1;min-height:300px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:48px 0 64px;border-top:1px solid #e5dfd5}\n.wood-shop-empty h2{margin:12px 0;font-family:Georgia,\"Times New Roman\",serif;font-size:clamp(28px,3vw,42px);font-weight:400;line-height:1.12;color:#292824}\n.wood-shop-empty p{max-width:470px;margin:0;color:#777167;font-size:15px;line-height:1.8}\n.wood-shop-reset{display:inline-flex;align-items:center;gap:12px;margin-top:24px;padding:13px 0;border-bottom:1px solid #292824;color:#292824;text-decoration:none;font-size:13px}\n.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}\n@media(max-width:780px){.wood-shop-title{align-items:flex-start;flex-direction:column;gap:20px}.wood-shop-title h1{font-size:clamp(42px,11vw,64px)}.wood-shop-filters{gap:22px}.wood-shop-empty{min-height:240px;padding:34px 0 48px}.wood-shop-result-count{margin:18px 0 14px}}"
+const WOODISTRY_CSS = `@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600&display=swap');\n\n:root{--wood-paper:#f5f2ec;--wood-white:#fbf9f5;--wood-ink:#292823;--wood-muted:#716b62;--wood-line:#ded8ce;--wood-serif:'Playfair Display',Georgia,serif;--wood-sans:'DM Sans',Arial,sans-serif}\nbody{font-family:var(--wood-sans);color:var(--wood-ink);background:var(--wood-paper)}\n.wood-announcement{height:35px;background:#292821;color:#f8f5ef;display:flex;align-items:center;justify-content:center;gap:13px;padding:0 5.8%;font-size:10px;letter-spacing:.01em;position:relative;z-index:1001}\n.wood-announcement i{height:13px;width:1px;background:#827e74}.wood-announcement-right{position:absolute;right:5.8%;display:flex;gap:28px;color:#d4d0c8}\n.wood-header{height:63px;background:#fbf9f5;border-bottom:1px solid #e4dfd7;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 5.8%;position:sticky;top:0;z-index:1000;color:var(--wood-ink)}\n.wood-wordmark{justify-self:start;display:flex;align-items:center;justify-content:flex-start;text-decoration:none!important;color:var(--wood-ink)!important;width:clamp(150px,17vw,245px);height:54px;white-space:nowrap;overflow:hidden}.wood-wordmark img{display:block;max-width:100%;width:100%;height:100%;object-fit:contain;object-position:left center}.wood-wordmark-text{display:none;font-size:22px;letter-spacing:.23em;font-weight:500;white-space:nowrap}\n.wood-nav{display:flex;align-items:center;gap:clamp(17px,2.2vw,36px);height:100%}.wood-nav>a{height:100%;display:flex;align-items:center;gap:5px;text-decoration:none;color:var(--wood-ink);font-size:12px;white-space:nowrap;transition:opacity .2s}.wood-nav>a:hover{opacity:.58}\n.wood-header-actions{justify-self:end;display:flex;align-items:center;gap:18px}.wood-header-actions button,.wood-mobile-menu{border:0;background:transparent;color:inherit;padding:3px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}.wood-header-actions button:hover{opacity:.6}.wood-action-search{gap:8px!important;font-size:12px}.wood-bag{position:relative}.wood-bag b{position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;border-radius:50%;background:#292823;color:#fff;font-size:9px;font-weight:500;display:grid;place-items:center}.wood-mobile-menu{display:none}\n.wood-mega-menu{position:absolute;top:100%;left:0;width:100%;min-height:280px;background:#f8f5ef;box-shadow:0 18px 32px #211e1714;border-top:1px solid #e9e3da;display:grid;grid-template-columns:.8fr 1fr 1fr;gap:38px;padding:38px 12.2% 36px;z-index:1005}.wood-mega-links{display:flex;flex-direction:column;align-items:flex-start;gap:15px}.wood-mega-links>a{font-size:12px;text-decoration:none;color:var(--wood-ink);text-transform:uppercase;letter-spacing:.07em}.wood-kicker{display:block;font-size:10px;line-height:1.4;letter-spacing:.22em;text-transform:uppercase;font-weight:700;color:#756e62}.wood-mega-feature{display:grid;grid-template-columns:42% 1fr;gap:16px;align-items:center;text-decoration:none;color:var(--wood-ink);min-width:0}.wood-mega-feature img{width:100%;height:126px;object-fit:cover}.wood-mega-feature span{display:flex;flex-direction:column;align-items:flex-start;gap:8px}.wood-mega-feature small{font-size:9px;letter-spacing:.16em}.wood-mega-feature strong{font:500 22px/1.1 var(--wood-serif)}.wood-mega-feature em{font-size:11px;font-style:normal}.wood-mega-close{position:absolute;top:20px;right:5.8%;border:0;background:none;cursor:pointer}\n.wood-search-panel{position:sticky;top:63px;z-index:999;background:#fbf9f5;padding:18px 6%;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--wood-line)}.wood-search-panel input{flex:1;border:0;border-bottom:1px solid var(--wood-line);background:transparent;padding:12px 4px;font:14px var(--wood-sans);outline:none}.wood-search-panel button{display:flex;align-items:center;gap:8px;border:0;background:transparent;cursor:pointer;font-size:12px}\n.wood-home{background:var(--wood-paper);overflow:hidden}.wood-hero{height:440px;min-height:0;position:relative;overflow:hidden;background:#777064;color:#fff}.wood-hero-media,.wood-hero-shade{position:absolute;inset:0}.wood-hero-media img,.wood-hero-media video{position:absolute;width:100%;height:100%;inset:0;object-fit:cover;opacity:0;transition:opacity .9s ease;display:block}.wood-hero-media img.is-active,.wood-hero-media video.is-active{opacity:1}.wood-hero-shade{background:linear-gradient(90deg,rgba(20,18,15,.82) 0%,rgba(20,18,15,.68) 30%,rgba(20,18,15,.36) 54%,rgba(20,18,15,.08) 78%,rgba(20,18,15,.02) 100%)}.wood-hero-copy{position:absolute;top:50%;left:9.6%;transform:translateY(-51%);max-width:540px;padding:clamp(18px,2vw,28px) 0;isolation:isolate}.wood-hero-copy:before{content:'';position:absolute;z-index:-1;inset:-22px -30px -22px -24px;background:linear-gradient(90deg,rgba(22,19,15,.24),rgba(22,19,15,0));filter:blur(12px);pointer-events:none}.wood-hero-copy .wood-kicker{display:inline-block;color:#fff;font-size:10px;font-weight:600;letter-spacing:.22em;margin-bottom:17px;text-shadow:0 2px 12px rgba(0,0,0,.6)}.wood-hero-copy h1{font:400 clamp(54px,5.1vw,78px)/.98 var(--wood-serif);letter-spacing:-.045em;margin:0 0 22px;color:#fff;text-shadow:0 3px 22px rgba(0,0,0,.38)}.wood-hero-copy p{max-width:430px;font-size:15px;line-height:1.8;margin:0 0 23px;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.68)}.wood-primary-button{display:inline-flex;align-items:center;gap:26px;padding:16px 19px;background:#fbf9f5;color:#292823;text-decoration:none;font-size:12px;min-height:48px;transition:background .25s,color .25s}.wood-primary-button:hover{background:#292823;color:#fff}.wood-hero-pagination{position:absolute;left:9.6%;right:9.6%;bottom:22px;display:flex;align-items:center;justify-content:flex-end}.wood-hero-numbers{display:flex;align-items:center;gap:24px}.wood-hero-numbers button{border:0;background:transparent;color:#fff;padding:4px 0;font:11px var(--wood-sans);cursor:pointer;opacity:.72;position:relative}.wood-hero-numbers button.active{opacity:1}.wood-hero-numbers button.active:after{content:'';position:absolute;left:29px;top:50%;width:24px;height:1px;background:#fff}.wood-hero-arrows{display:flex;gap:8px}.wood-hero-arrows button{width:40px;height:40px;border:1px solid #ffffff9c;border-radius:50%;color:#fff;background:transparent;font-size:19px;cursor:pointer;transition:background .2s}.wood-hero-arrows button:hover{background:#ffffff2b}\n.wood-space-section{padding:20px 5.8% 64px;display:grid;grid-template-columns:clamp(205px,14.2vw,290px) minmax(0,1fr);gap:40px;align-items:center;min-width:0}.wood-section-intro{min-width:0;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;padding-block:2px;margin-top:0}.wood-section-intro h2,.wood-products-intro h2,.wood-mobile-section-heading h2{font:500 32px/1.12 var(--wood-serif);letter-spacing:-.04em;margin:0 0 13px}.wood-section-intro p,.wood-products-intro p{font-size:13px;line-height:1.65;color:var(--wood-muted);margin:0 0 22px}.wood-section-intro>a,.wood-products-intro>a,.wood-mobile-section-heading>a{display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--wood-ink);font-size:11px;border-bottom:1px solid #777064;padding-bottom:6px}.wood-space-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.wood-space-card{height:clamp(190px,13.8vw,285px);position:relative;overflow:hidden;display:block;background:#d5cec2;color:#fff;text-decoration:none}.wood-space-card:after{content:'';position:absolute;inset:12% 0 0;background:linear-gradient(180deg,rgba(20,18,15,0) 12%,rgba(20,18,15,.12) 42%,rgba(20,18,15,.76) 100%);pointer-events:none}.wood-space-card img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s cubic-bezier(.2,.7,.2,1)}.wood-space-card:hover img{transform:scale(1.045)}.wood-space-card>span{position:absolute;z-index:1;left:16px;right:16px;bottom:17px;display:flex;align-items:center;justify-content:space-between;gap:10px;font:500 clamp(17px,1.45vw,23px)/1.15 var(--wood-serif);letter-spacing:-.015em;color:#fff;text-shadow:0 2px 10px rgba(35,22,12,.42)}.wood-space-card>span svg{flex-shrink:0;display:block;width:16px;height:16px;stroke-width:1.6;filter:none;transition:transform .25s ease}.wood-space-card:hover>span svg{transform:translateX(4px)}\n.wood-products-section{padding:5px 5.8% 82px;display:grid;grid-template-columns:205px minmax(0,1fr);gap:40px}.wood-products-intro{padding-top:4px}.wood-products-content{min-width:0}.wood-product-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:18px 16px;align-items:start}.wood-product-grid .product-card{min-width:0;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible;display:flex;flex-direction:column}.wood-product-grid .product-image{position:relative;aspect-ratio: .78 / 1;overflow:hidden;background:#e4dfd7;border-radius:0;margin:0}.wood-product-grid .product-image-link{display:block;width:100%;height:100%;position:absolute;inset:0}.wood-product-grid .product-image-primary,.wood-product-grid .product-image-secondary{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .45s ease,transform .7s ease}.wood-product-grid .product-image-primary{position:relative}.wood-product-grid .product-image-secondary{position:absolute;inset:0;opacity:0}.wood-product-grid .product-card:hover .product-image-primary{transform:scale(1.025)}.wood-product-grid .product-card:hover .product-image-secondary{opacity:1}.wood-product-grid .heart{position:absolute;top:12px;right:12px;width:30px;height:30px;border:0;background:transparent;color:#292823;padding:4px;z-index:2}.wood-product-grid .heart svg{width:20px;height:20px}.wood-product-grid .heart-tooltip{display:none}.wood-product-grid .product-image-bottom-spacer{display:none}.wood-product-grid .product-copy{padding:11px 0 0;display:flex;flex-direction:column;gap:4px}.wood-product-grid .product-meta{display:none}.wood-product-grid .product-title-link{text-decoration:none;color:var(--wood-ink)}.wood-product-grid .product-title-link h3{font:400 13px/1.4 var(--wood-sans);margin:0;color:var(--wood-ink)}.wood-product-grid .product-description{font-size:11px;line-height:1.4;color:#827b70;margin:0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.wood-product-grid .rating{display:none}.wood-product-grid .product-bottom-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:1px}.wood-product-grid .price{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.wood-product-grid .price strong{font-size:12px;font-weight:500;color:var(--wood-ink)}.wood-product-grid .price del,.wood-product-grid .save-badge{display:none}.wood-product-grid .add{border:1px solid #d4cec4;background:transparent;color:var(--wood-ink);border-radius:0;min-height:30px;padding:5px 8px;font-size:10px;opacity:0;transition:opacity .2s,background .2s;white-space:nowrap}.wood-product-grid .product-card:hover .add,.wood-product-grid .add:focus{opacity:1}.wood-product-grid .add:hover{background:var(--wood-ink);color:#fff}.wood-product-grid .add-label{font-size:10px}.wood-product-grid .add-icon,.wood-product-grid .add-shine{display:none}.wood-empty-products{grid-column:1/-1;color:var(--wood-muted);font-size:13px;padding:35px 0}.wood-mobile-section-heading{display:none}\n.wood-editorial{display:grid;grid-template-columns:.78fr 1.22fr;min-height:470px;background:#e9e3d9}.wood-editorial-copy{padding:70px clamp(30px,8vw,120px);display:flex;flex-direction:column;align-items:flex-start;justify-content:center}.wood-editorial-copy h2{font:400 clamp(42px,4.5vw,65px)/1.02 var(--wood-serif);letter-spacing:-.05em;margin:18px 0 20px}.wood-editorial-copy h2 em{font-weight:400;color:#8d6f54}.wood-editorial-copy p{max-width:390px;font-size:13px;line-height:1.85;color:#716b62;margin:0 0 24px}.wood-outline-button{display:inline-flex;align-items:center;gap:18px;padding:13px 17px;border:1px solid #a9a094;color:var(--wood-ink);text-decoration:none;font-size:11px}.wood-outline-button:hover{background:#292823;color:#fff;border-color:#292823}.wood-editorial-image{min-height:420px;overflow:hidden}.wood-editorial-image img{width:100%;height:100%;object-fit:cover;display:block}.wood-service-strip{padding:30px 5.8%;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;border-bottom:1px solid var(--wood-line)}.wood-service-strip>div{display:flex;align-items:center;justify-content:center;gap:13px}.wood-service-strip svg{flex-shrink:0;stroke-width:1.25}.wood-service-strip span{display:flex;flex-direction:column;gap:4px}.wood-service-strip strong{font-size:11px;font-weight:600}.wood-service-strip small{font-size:10px;color:var(--wood-muted)}\n/* Footer keeps the original links and newsletter integrations, with the new visual language. */\n.footer{background:#292823!important;color:#f6f2ea!important;padding-top:54px!important}.footer .footer-main{max-width:none!important;padding-left:5.8%!important;padding-right:5.8%!important}.footer .wood-footer-wordmark{display:flex!important;flex-direction:column;align-items:flex-start;gap:12px;text-decoration:none!important;color:#f6f2ea!important}.footer .wood-footer-wordmark span{font-size:21px;letter-spacing:.2em;font-weight:500}.footer .footer-main h4{font-size:11px!important;letter-spacing:.14em;text-transform:uppercase}.footer a{color:inherit}.footer .footer-bottom{padding-left:5.8%!important;padding-right:5.8%!important}\n/* Reuse the existing newsletter and content pages without changing their data flow. */\n.newsletter{background:#e9e3d9!important;color:var(--wood-ink)!important}.newsletter .eyebrow{color:#796d5d!important}.newsletter h2{font-family:var(--wood-serif)!important}.newsletter form input{border-radius:0!important}.newsletter form button{border-radius:0!important}\n@media(max-width:1100px){.wood-header{padding:0 3.5%}.wood-wordmark{font-size:19px;letter-spacing:.18em}.wood-wordmark-text{font-size:19px;letter-spacing:.18em}.wood-nav{gap:14px}.wood-nav>a{font-size:11px}.wood-header-actions{gap:12px}.wood-space-section,.wood-products-section{padding-left:4%;padding-right:4%;grid-template-columns:170px minmax(0,1fr);gap:25px}.wood-product-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.wood-product-grid .product-card:nth-child(n+5){display:none}.wood-announcement-right{right:3.5%}}\n@media(max-width:780px){.wood-announcement{height:32px;font-size:9px;padding:0 12px;gap:8px}.wood-announcement-right{display:none}.wood-header{height:62px;padding:0 18px;grid-template-columns:36px 1fr auto;gap:10px}.wood-mobile-menu{display:inline-flex;justify-self:start}.wood-wordmark{justify-self:center;width:clamp(120px,38vw,170px);font-size:18px;letter-spacing:.18em}.wood-wordmark img{object-position:center}.wood-wordmark-text{font-size:18px;letter-spacing:.18em}.wood-nav{display:none;position:absolute;top:100%;left:0;right:0;height:auto;background:#fbf9f5;padding:12px 22px 24px;box-shadow:0 16px 20px #211e1714;align-items:stretch;flex-direction:column;gap:0}.wood-nav.is-open{display:flex}.wood-nav>a{min-height:47px;border-bottom:1px solid #e9e3da;justify-content:space-between;font-size:13px}.wood-header-actions{gap:11px}.wood-action-search span{display:none}.wood-header-actions button svg{width:19px;height:19px}.wood-header-actions button:first-child{display:inline-flex}.wood-header-actions button:nth-child(2){display:none}.wood-bag b{top:-6px;right:-6px}.wood-mega-menu{display:none}.wood-search-panel{top:62px;padding:12px 18px;gap:10px}.wood-search-panel input{min-width:0}.wood-hero{height:615px;min-height:0;max-height:none}.wood-hero-shade{background:linear-gradient(90deg,rgba(25,23,19,.62),rgba(25,23,19,.12)),linear-gradient(0deg,rgba(25,23,19,.28),transparent 50%)}.wood-hero-copy{left:7%;right:6%;top:49%;max-width:460px}.wood-hero-copy h1{font-size:clamp(52px,12vw,72px)}.wood-hero-copy p{font-size:13px}.wood-hero-pagination{left:7%;right:7%;bottom:18px}.wood-space-section{padding:42px 18px 48px;display:block}.wood-section-intro{display:grid;grid-template-columns:1fr auto;align-items:end;margin-bottom:20px}.wood-section-intro h2{font-size:29px;margin:0}.wood-section-intro p{grid-column:1;grid-row:2;margin:8px 0 0;font-size:12px}.wood-section-intro>a{grid-column:2;grid-row:1/3;align-self:end}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.wood-space-card{height:clamp(175px,51vw,260px)}.wood-space-card>span{left:12px;bottom:13px;font-size:21px}.wood-products-section{padding:5px 18px 55px;display:block}.wood-products-intro{display:none}.wood-mobile-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.wood-mobile-section-heading h2{font-size:29px;margin:0}.wood-mobile-section-heading>a{font-size:11px}.wood-product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 12px}.wood-product-grid .product-card:nth-child(n+5){display:flex}.wood-product-grid .product-image{aspect-ratio:.79/1}.wood-product-grid .product-copy{padding-top:9px}.wood-product-grid .product-title-link h3{font-size:12px}.wood-product-grid .product-description{font-size:10px}.wood-product-grid .price strong{font-size:12px}.wood-product-grid .add{opacity:1;padding:5px 6px;min-height:27px}.wood-product-grid .add-label{font-size:9px}.wood-product-grid .heart{top:8px;right:8px}.wood-editorial{grid-template-columns:1fr}.wood-editorial-copy{padding:48px 24px 42px;order:2}.wood-editorial-copy h2{font-size:48px}.wood-editorial-image{min-height:290px;height:65vw;order:1}.wood-service-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:23px 12px;padding:25px 18px}.wood-service-strip>div{justify-content:flex-start;gap:10px}.wood-service-strip svg{width:20px}.wood-service-strip strong{font-size:10px}.wood-service-strip small{font-size:9px}.footer .footer-main{padding-left:22px!important;padding-right:22px!important}.footer .footer-bottom{padding-left:22px!important;padding-right:22px!important}.footer .wood-footer-wordmark span{font-size:18px}}\n@media(max-width:390px){.wood-wordmark{font-size:15px;letter-spacing:.16em}.wood-wordmark-text{font-size:15px;letter-spacing:.16em}.wood-header-actions{gap:8px}.wood-header-actions button svg{width:18px;height:18px}.wood-hero{height:540px}.wood-hero-copy h1{font-size:49px}.wood-space-card>span{font-size:18px}.wood-product-grid .product-bottom-row{align-items:flex-start;flex-direction:column}.wood-product-grid .add{width:100%}.wood-service-strip{grid-template-columns:1fr 1fr}}\n.wood-demo-product{min-width:0;display:flex;flex-direction:column;align-items:stretch}.wood-demo-image{aspect-ratio:.78/1;position:relative;display:block;overflow:hidden;background:#e4dfd7;color:var(--wood-ink)}.wood-demo-image img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .7s ease}.wood-demo-product:hover .wood-demo-image img{transform:scale(1.035)}.wood-demo-heart{position:absolute;right:12px;top:12px}.wood-demo-quick{position:absolute;bottom:0;left:0;right:0;padding:11px 6px;text-align:center;background:#fbf9f5eF;color:var(--wood-ink);font-size:11px;transform:translateY(100%);transition:transform .25s}.wood-demo-product:hover .wood-demo-quick{transform:translateY(0)}.wood-demo-name{margin-top:11px;font-size:13px;line-height:1.4;text-decoration:none;color:var(--wood-ink)}.wood-demo-product p{margin:3px 0 5px;font-size:11px;color:#827b70}.wood-demo-product>strong{font-size:12px;font-weight:500}@media(max-width:780px){.wood-demo-heart{top:8px;right:8px}.wood-demo-name{font-size:12px}.wood-demo-quick{transform:none;font-size:10px;padding:8px 4px}}\n@media(min-width:781px){.wood-hero{height:440px;min-height:0}.wood-space-section{padding-top:24px}.wood-section-intro{overflow:visible;align-self:center}.wood-section-intro h2{display:block;overflow:visible;line-height:1.12;margin:0 0 13px;padding:2px 0}}\n/* Homepage Best Sellers: clean editorial product layout matching the Oak Lounge reference. */\n.wood-product-grid .wood-home-product{min-width:0;display:flex;flex-direction:column;background:transparent;border:0;border-radius:0;box-shadow:none;overflow:visible}\n/* Best Sellers image ratio matches reference: 206 x 265 */.wood-product-grid .wood-home-product-image{position:relative;width:100%;aspect-ratio:206/265;height:auto;min-height:0;overflow:hidden;background:#e4dfd7;border-radius:0}\n.wood-product-grid .wood-home-product-image>a{position:absolute;inset:0;display:block;width:100%;height:100%;overflow:hidden}\n.wood-product-grid .wood-home-product-image img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .65s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-image img{transform:scale(1.045)}\n.wood-product-grid .wood-home-product-quick{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 8px;background:rgba(251,249,245,.94);color:var(--wood-ink);font-size:12px;letter-spacing:.01em;transform:translateY(101%);opacity:0;transition:transform .28s ease,opacity .28s ease}\n.wood-product-grid .wood-home-product:hover .wood-home-product-quick,.wood-product-grid .wood-home-product:focus-within .wood-home-product-quick{transform:translateY(0);opacity:1}\n.wood-product-grid .wood-home-product-image-link:focus-visible{outline:2px solid var(--wood-ink);outline-offset:-3px}\n.wood-product-grid .wood-home-product-heart{position:absolute;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:0;background:transparent;color:#292823;cursor:pointer}\n.wood-product-grid .wood-home-product-details{padding:11px 0 0;min-width:0}\n.wood-product-grid .wood-home-product-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}\n.wood-product-grid .wood-home-product-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;color:var(--wood-ink);font-size:13px;line-height:1.4}\n.wood-product-grid .wood-home-product-price-wrap{flex-shrink:0;display:flex;align-items:baseline;justify-content:flex-end;gap:6px;flex-wrap:wrap;min-width:0}.wood-product-grid .wood-home-product-price{color:var(--wood-ink);font-size:12px;font-weight:500;white-space:nowrap}.wood-product-grid .wood-home-product-old-price{color:#999186;font-size:10px;white-space:nowrap}.wood-product-grid .wood-home-product-discount{color:#765b3f;font-size:9px;white-space:nowrap}\n.wood-product-grid .wood-home-product-material{margin:7px 0 0;color:#827b70;font-size:11px;line-height:1.4}\n@media(max-width:780px){.wood-product-grid .wood-home-product-image{aspect-ratio:.78/1}.wood-product-grid .wood-home-product-heart{top:8px;right:8px}.wood-product-grid .wood-home-product-name{font-size:12px}.wood-product-grid .wood-home-product-price{font-size:12px}.wood-product-grid .wood-home-product-material{font-size:10px;margin-top:5px}.wood-product-grid .wood-home-product-title-row{gap:5px}}\n\n\n\n/* WOODISTRY SHOP COLLECTION */\n.wood-shop-sort-label{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:220px;color:#292823;font-family:var(--wood-sans)}\n.wood-shop-sort-caption{flex:0 0 auto;font-size:12px;color:#716b62}\n.wood-shop-sort-label select{appearance:auto;min-width:170px;max-width:100%;padding:10px 26px 10px 2px;border:0;border-bottom:1px solid #292823;border-radius:0;background:transparent;color:#292823;font:400 13px/1.4 var(--wood-sans);cursor:pointer;outline-offset:4px}\n.wood-shop-sort-label select:focus-visible{outline:1px solid #8d806e}\n.wood-shop-page .breadcrumbs a{color:inherit;text-decoration:none}\n.wood-shop-title{align-items:flex-end;gap:32px}\n.wood-shop-title h1{max-width:900px}\n.wood-shop-title p{max-width:620px}\n.wood-shop-sort-label select{min-width:170px}\n.wood-shop-filters{display:flex;gap:30px;align-items:center;overflow-x:auto;white-space:nowrap;scrollbar-width:none}\n.wood-shop-filters::-webkit-scrollbar{display:none}\n.wood-shop-filters a{flex:0 0 auto;text-decoration:none}\n.wood-shop-filters a.active{color:#292824;border-bottom-color:#292824}\n.wood-shop-result-count{margin:22px 0 18px;color:#777167;font-size:12px;letter-spacing:.04em}\n.wood-shop-grid{align-items:start}\n.wood-shop-empty{grid-column:1/-1;min-height:300px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:48px 0 64px;border-top:1px solid #e5dfd5}\n.wood-shop-empty h2{margin:12px 0;font-family:Georgia,\"Times New Roman\",serif;font-size:clamp(28px,3vw,42px);font-weight:400;line-height:1.12;color:#292824}\n.wood-shop-empty p{max-width:470px;margin:0;color:#777167;font-size:15px;line-height:1.8}\n.wood-shop-reset{display:inline-flex;align-items:center;gap:12px;margin-top:24px;padding:13px 0;border-bottom:1px solid #292824;color:#292824;text-decoration:none;font-size:13px}\n.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}\n@media(max-width:780px){.wood-shop-title{align-items:flex-start;flex-direction:column;gap:20px}.wood-shop-title h1{font-size:clamp(42px,11vw,64px)}.wood-shop-filters{gap:22px}.wood-shop-empty{min-height:240px;padding:34px 0 48px}.wood-shop-result-count{margin:18px 0 14px}}
+/* Shop by Space: responsive cards with collection labels kept fully visible. */
+.wood-space-section,.wood-space-grid{min-width:0;width:100%;}
+.wood-space-grid{grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;gap:clamp(8px,1vw,14px);}
+.wood-space-card{min-width:0;height:clamp(190px,17vw,285px);isolation:isolate;}
+.wood-space-card .wood-space-card-image,.wood-space-card .woodistry-image-shell{min-width:0;min-height:0;}
+.wood-space-card .woodistry-image-content{object-fit:cover;object-position:center;}
+.wood-space-card-label{position:absolute;z-index:2;left:clamp(10px,1.2vw,18px);right:clamp(10px,1.2vw,18px);bottom:clamp(12px,1.3vw,18px);display:flex;align-items:flex-end;justify-content:space-between;gap:8px;min-width:0;color:#fff;font:500 clamp(14px,1.25vw,21px)/1.2 var(--wood-serif);letter-spacing:-.015em;text-shadow:0 2px 10px rgba(35,22,12,.55);overflow:visible;}
+.wood-space-card-label-text{display:block;min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:normal;}
+.wood-space-card-label svg{flex:0 0 16px;width:16px;height:16px;margin-bottom:2px;}
+@media(max-width:1100px){.wood-space-section{grid-template-columns:minmax(170px,.72fr) minmax(0,2fr);gap:24px}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.wood-space-card{height:clamp(190px,25vw,270px)}.wood-space-card-label{font-size:clamp(15px,1.8vw,20px)}}
+@media(max-width:780px){.wood-space-section{display:block;padding:36px 18px 44px}.wood-section-intro{margin-bottom:18px}.wood-space-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.wood-space-card{height:auto;aspect-ratio: .88 / 1;min-height:160px;max-height:270px}.wood-space-card-label{left:10px;right:10px;bottom:11px;font-size:clamp(14px,3.7vw,18px);line-height:1.2;gap:6px}.wood-space-card-label svg{flex-basis:14px;width:14px;height:14px}}
+@media(max-width:360px){.wood-space-section{padding-left:12px;padding-right:12px}.wood-space-grid{gap:8px}.wood-space-card{min-height:150px}.wood-space-card-label{font-size:13px;left:8px;right:8px;bottom:9px}}
+`;
 
 
 const WOODISTRY_FOOTER_CSS = `
@@ -8206,7 +8596,7 @@ const WOODISTRY_FOOTER_CSS = `
   border-top: 1px solid #ded5c8;
 }
 .newsletter:before, .newsletter:after {
-  content: "";
+  content: "\n.product-meta .product-subcategory{display:block;margin-top:3px;color:#827b70;font:400 10px/1.4 var(--wood-sans);}";
   position: absolute;
   top: 50%;
   width: min(18vw, 240px);

@@ -368,30 +368,79 @@ router.put(
 // GET /api/cms/section-images
 // ==========================================================
 
+const defaultSectionSpaces = {
+  'New Arrivals': '',
+  'Dining & Serving': '',
+  'Kitchen Essentials': '',
+  'Storage & Containers': '',
+}
+
+// Normalize current and legacy Shop by Space keys to the exact labels used by
+// the Woodistry admin panel and homepage. Older versions may store spaces as an array.
+const normalizeSectionSpaces = (rawSpaces = {}) => {
+  const spaces = Array.isArray(rawSpaces)
+    ? rawSpaces.reduce((acc, item) => {
+        if (item?.name) acc[item.name] = item.image ?? item.imageUrl ?? item.url ?? ''
+        return acc
+      }, {})
+    : (rawSpaces && typeof rawSpaces === 'object' ? rawSpaces : {})
+
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const value = spaces[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+      if (value && typeof value === 'object') {
+        const url = value.url || value.secure_url || value.src || value.imageUrl || value.image || ''
+        if (typeof url === 'string' && url.trim()) return url.trim()
+      }
+    }
+    return ''
+  }
+
+  return {
+    'New Arrivals': pick('New Arrivals', 'newArrivals', 'new-arrivals', 'new_arrivals'),
+    'Dining & Serving': pick('Dining & Serving', 'Dining', 'dining', 'diningAndServing', 'dining-and-serving', 'dining_serving'),
+    'Kitchen Essentials': pick('Kitchen Essentials', 'Kitchen', 'kitchen', 'kitchenEssentials', 'kitchen-essentials', 'kitchen_essentials'),
+    'Storage & Containers': pick('Storage & Containers', 'Storage', 'storage', 'storageAndContainers', 'storage-and-containers', 'storage_containers'),
+  }
+}
+
+const normalizeSectionImageUrl = (value, fieldName) => {
+  const url = String(value ?? '').trim()
+  if (!url) return ''
+
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Invalid protocol')
+    }
+  } catch {
+    const error = new Error(`${fieldName} must be a valid HTTP or HTTPS URL.`)
+    error.statusCode = 422
+    throw error
+  }
+
+  return url
+}
+
 router.get(
   '/section-images',
   asyncHandler(async (_req, res) => {
-    const content = await Content.findOne({
-      type: 'section-images',
-    }).lean()
+    // Sort newest-first because older versions may have created duplicate documents.
+    const content = await Content.findOne({ type: 'section-images' })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean()
 
-    const sectionImages =
-      content?.metadata?.sectionImages || {}
+    const saved = content?.metadata?.sectionImages || content?.metadata || {}
+    const savedSpaces = saved.spaces || saved.shopBySpace || {}
+    const data = {
+      brandStory: String(saved.brandStory || saved.brandStoryImage || '').trim(),
+      spaces: normalizeSectionSpaces(savedSpaces),
+    }
 
-    const spaces = sectionImages.spaces || {}
-
-    res.json({
-      success: true,
-      data: {
-        brandStory: sectionImages.brandStory || '',
-        spaces: {
-          'Living Room': spaces['Living Room'] || '',
-          Dining: spaces.Dining || '',
-          Bedroom: spaces.Bedroom || '',
-          Storage: spaces.Storage || '',
-        },
-      },
-    })
+    // Prevent stale CMS responses from being cached by the browser/CDN.
+    res.set('Cache-Control', 'no-store')
+    return res.status(200).json({ success: true, data })
   })
 )
 
@@ -407,67 +456,57 @@ router.put(
   asyncHandler(async (req, res) => {
     const body = req.body || {}
 
-    const brandStory = String(
-      body.brandStory || ''
-    ).trim()
+    // Preserve existing values when an older client sends only one field.
+    const existingContent = await Content.findOne({ type: 'section-images' })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean()
+    const existing = existingContent?.metadata?.sectionImages || existingContent?.metadata || {}
+    const existingSpaces = existing.spaces || existing.shopBySpace || {}
+    const incomingSpaces = body.spaces || body.shopBySpace || {}
 
-    const incomingSpaces = body.spaces || {}
+    const brandStoryInput = body.brandStory ?? body.brandStoryImage ?? existing.brandStory ?? existing.brandStoryImage ?? ''
+    const brandStory = normalizeSectionImageUrl(brandStoryInput, 'Brand Story image')
 
+    // Normalize current and legacy labels before validating and saving.
+    // Incoming values take precedence over stored values, including intentional empty strings.
+    const normalizedIncoming = normalizeSectionSpaces(incomingSpaces)
+    const normalizedExisting = normalizeSectionSpaces(existingSpaces)
     const spaces = {
-      'Living Room': String(
-        incomingSpaces['Living Room'] || ''
-      ).trim(),
-      Dining: String(
-        incomingSpaces.Dining || ''
-      ).trim(),
-      Bedroom: String(
-        incomingSpaces.Bedroom || ''
-      ).trim(),
-      Storage: String(
-        incomingSpaces.Storage || ''
-      ).trim(),
+      'New Arrivals': normalizeSectionImageUrl(
+        (['New Arrivals', 'newArrivals', 'new-arrivals', 'new_arrivals'].some(key => Object.prototype.hasOwnProperty.call(incomingSpaces, key)))
+          ? normalizedIncoming['New Arrivals']
+          : normalizedExisting['New Arrivals'],
+        'New Arrivals image'
+      ),
+      'Dining & Serving': normalizeSectionImageUrl(
+        (Object.prototype.hasOwnProperty.call(incomingSpaces, 'Dining & Serving') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'Dining') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'dining'))
+          ? normalizedIncoming['Dining & Serving']
+          : normalizedExisting['Dining & Serving'],
+        'Dining & Serving image'
+      ),
+      'Kitchen Essentials': normalizeSectionImageUrl(
+        (Object.prototype.hasOwnProperty.call(incomingSpaces, 'Kitchen Essentials') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'Kitchen') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'kitchen'))
+          ? normalizedIncoming['Kitchen Essentials']
+          : normalizedExisting['Kitchen Essentials'],
+        'Kitchen Essentials image'
+      ),
+      'Storage & Containers': normalizeSectionImageUrl(
+        (Object.prototype.hasOwnProperty.call(incomingSpaces, 'Storage & Containers') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'Storage') || Object.prototype.hasOwnProperty.call(incomingSpaces, 'storage'))
+          ? normalizedIncoming['Storage & Containers']
+          : normalizedExisting['Storage & Containers'],
+        'Storage & Containers image'
+      ),
     }
 
-    const urls = [
-      brandStory,
-      ...Object.values(spaces),
-    ]
-
-    const invalidUrl = urls.some((url) => {
-      if (!url) return false
-
-      try {
-        const parsed = new URL(url)
-
-        return !['http:', 'https:'].includes(
-          parsed.protocol
-        )
-      } catch {
-        return true
-      }
-    })
-
-    if (invalidUrl) {
-      return res.status(422).json({
-        success: false,
-        message:
-          'Please provide valid HTTP or HTTPS image URLs.',
-      })
-    }
-
-    const sectionImages = {
-      brandStory,
-      spaces,
-    }
+    const sectionImages = { brandStory, spaces }
 
     const savedContent = await Content.findOneAndUpdate(
       { type: 'section-images' },
       {
         $set: {
           type: 'section-images',
-          metadata: {
-            sectionImages,
-          },
+          title: 'Brand Story and Homepage Collection Images',
+          metadata: { sectionImages },
           isActive: true,
           enabled: true,
           order: 0,
@@ -481,14 +520,13 @@ router.put(
         runValidators: true,
         setDefaultsOnInsert: true,
       }
-    )
+    ).lean()
 
-    res.json({
+    res.set('Cache-Control', 'no-store')
+    return res.status(200).json({
       success: true,
-      message: 'Section images saved successfully.',
-      data:
-        savedContent.metadata?.sectionImages ||
-        sectionImages,
+      message: 'Brand Story and homepage collection images saved successfully.',
+      data: savedContent?.metadata?.sectionImages || sectionImages,
     })
   })
 )

@@ -63,15 +63,15 @@ export default function Admin() {
   const [savingHeroSlides, setSavingHeroSlides] = useState(false)
 
   // =========================
-  // Brand Story + Shop by Space Images
+  // Brand Story + Homepage Collection Images
   // =========================
   const defaultSectionImages = {
     brandStory: '',
     spaces: {
-      'Living Room': '',
-      Dining: '',
-      Bedroom: '',
-      Storage: ''
+      'New Arrivals': '',
+      'Dining & Serving': '',
+      'Kitchen Essentials': '',
+      'Storage & Containers': ''
     }
   }
   const [sectionImages, setSectionImages] = useState(defaultSectionImages)
@@ -104,13 +104,67 @@ export default function Admin() {
   // =========================
   // Product Form State
   // =========================
+  // Woodistry product taxonomy used by the Add / Edit Product form.
+  const productCategoryMap = {
+    'Dining & Serving': [
+      'Serving Trays',
+      'Serving Platters',
+      'Platters',
+      'Cake Stands',
+      'Tea Coasters',
+      'Cups & Mugs',
+      'Salad Bowls',
+      'Napkin Holders'
+    ],
+    'Kitchen Essentials': [
+      'Spice Boxes',
+      'Chopping Boards',
+      'Mortar & Pestle',
+      'Serving & Cooking Spoons',
+      'Cutlery Holders',
+      'Kitchen Organisers'
+    ],
+    'Storage & Containers': [
+      'Dry Fruit Boxes',
+      'Bowls & Jars',
+      'Refreshment Jars',
+      'Casseroles',
+      'Folding & Fruit Baskets'
+    ]
+  }
+
+  const formatUSD = value => new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0)
+
+  const getDiscountFromPrices = (mrp, price) => {
+    const original = Number(mrp)
+    const selling = Number(price)
+    if (!original || original <= 0 || selling >= original) return 0
+    return Math.min(100, Math.max(0, Number((((original - selling) / original) * 100).toFixed(2))))
+  }
+
+  const calculateSellingPrice = (mrp, discountPercent) => {
+    const original = Number(mrp)
+    const discount = Number(discountPercent)
+    if (!Number.isFinite(original) || original < 0 || !Number.isFinite(discount) || discount < 0 || discount > 100) return ''
+    return Number((original * (1 - discount / 100)).toFixed(2))
+  }
+
   const emptyProduct = {
     name: '',
     slug: '',
     description: '',
     category: '',
+    subcategory: '',
+    hsnCode: '',
     mrp: '',
+    discountPercent: '0',
     price: '',
+    showDiscountPercent: false,
     stock: '',
     shipping: { weight: '', length: '', breadth: '', height: '' },
     images: [''],
@@ -396,27 +450,91 @@ export default function Admin() {
   }
 
   // =========================
-  // Brand Story + Shop by Space Images API
+  // Brand Story + Homepage Collection Images API
   // =========================
+  const normalizeSectionSpaces = rawSpaces => {
+    const entries = Array.isArray(rawSpaces)
+      ? rawSpaces.reduce((acc, item) => {
+          if (item?.name) {
+            acc[item.name] =
+              item.image ??
+              item.imageUrl ??
+              item.url ??
+              item.secure_url ??
+              item.src ??
+              ''
+          }
+          return acc
+        }, {})
+      : (rawSpaces && typeof rawSpaces === 'object' ? rawSpaces : {})
+
+    // Support canonical labels and legacy keys returned by older CMS data.
+    const getImageValue = value => {
+      if (typeof value === 'string') return value.trim()
+      if (value && typeof value === 'object') {
+        const candidate =
+          value.url ??
+          value.secure_url ??
+          value.src ??
+          value.imageUrl ??
+          value.image ??
+          ''
+        return typeof candidate === 'string' ? candidate.trim() : ''
+      }
+      return ''
+    }
+
+    const pick = (...keys) => {
+      for (const key of keys) {
+        const value = getImageValue(entries[key])
+        if (value) return value
+      }
+      return ''
+    }
+
+    return {
+      'New Arrivals': pick(
+        'New Arrivals',
+        'newArrivals',
+        'new-arrivals',
+        'new_arrivals'
+      ),
+      'Dining & Serving': pick(
+        'Dining & Serving',
+        'Dining',
+        'dining',
+        'diningAndServing',
+        'dining-and-serving',
+        'dining_serving'
+      ),
+      'Kitchen Essentials': pick(
+        'Kitchen Essentials',
+        'Kitchen',
+        'kitchen',
+        'kitchenEssentials',
+        'kitchen-essentials',
+        'kitchen_essentials'
+      ),
+      'Storage & Containers': pick(
+        'Storage & Containers',
+        'Storage',
+        'storage',
+        'storageAndContainers',
+        'storage-and-containers',
+        'storage_containers'
+      )
+    }
+  }
+
   const loadSectionImages = async () => {
     try {
       setLoadingSectionImages(true)
       const result = await apiRequest('/cms/section-images')
       const data = result?.data || result?.sectionImages || result || {}
-      const rawSpaces = data?.spaces || data?.shopBySpace || {}
-      const spaces = Array.isArray(rawSpaces)
-        ? rawSpaces.reduce((acc, item) => {
-            if (item?.name) acc[item.name] = item.image || item.imageUrl || ''
-            return acc
-          }, {})
-        : rawSpaces
-
+      const rawSpaces = data?.spaces || data?.shopBySpace || data?.collections || {}
       setSectionImages({
         brandStory: data?.brandStory || data?.brandStoryImage || '',
-        spaces: {
-          ...defaultSectionImages.spaces,
-          ...(spaces && typeof spaces === 'object' ? spaces : {})
-        }
+        spaces: normalizeSectionSpaces(rawSpaces)
       })
     } catch (err) {
       // A missing CMS endpoint should not block the rest of the admin panel.
@@ -453,14 +571,9 @@ export default function Admin() {
       const savedSpaces = data?.spaces || data?.shopBySpace || payload.spaces
       setSectionImages({
         brandStory: data?.brandStory || data?.brandStoryImage || payload.brandStory,
-        spaces: Array.isArray(savedSpaces)
-          ? savedSpaces.reduce((acc, item) => {
-              if (item?.name) acc[item.name] = item.image || item.imageUrl || ''
-              return acc
-            }, { ...defaultSectionImages.spaces })
-          : { ...defaultSectionImages.spaces, ...(savedSpaces || {}) }
+        spaces: normalizeSectionSpaces(savedSpaces)
       })
-      setMessage('Brand Story and Shop by Space images updated successfully.')
+      setMessage('Brand Story and homepage collection images updated successfully.')
     } catch (err) {
       setError(err.message || 'Unable to save section images. Confirm the backend /cms/section-images endpoint is implemented.')
     } finally {
@@ -780,12 +893,26 @@ export default function Admin() {
   // Form Input Handler
   // =========================
   const handleChange = e => {
-    const { name, value } = e.target
+    const { name, value, type, checked } = e.target
 
-    setForm(prev => ({
-      ...prev,
-      [name]: value
-    }))
+    setForm(prev => {
+      const next = {
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value
+      }
+
+      // A changed category clears a subcategory from the previous category.
+      if (name === 'category') next.subcategory = ''
+
+      // Selling price is always calculated from MRP and discount.
+      if (name === 'mrp' || name === 'discountPercent') {
+        const nextMrp = name === 'mrp' ? value : prev.mrp
+        const nextDiscount = name === 'discountPercent' ? value : prev.discountPercent
+        next.price = calculateSellingPrice(nextMrp, nextDiscount)
+      }
+
+      return next
+    })
   }
 
   const handleShippingChange = e => {
@@ -846,13 +973,23 @@ export default function Admin() {
   const handleEditProduct = product => {
     setEditingId(product._id)
 
+    const originalPrice = product.mrp ?? product.compareAtPrice ?? product.price ?? ''
+    const currentSellingPrice = product.price ?? ''
+    const existingDiscount = product.discountPercent ?? getDiscountFromPrices(originalPrice, currentSellingPrice)
+
     setForm({
       name: product.name || '',
       slug: product.slug || '',
       description: product.description || '',
       category: product.category || '',
-      mrp: product.mrp ?? product.compareAtPrice ?? '',
-      price: product.price ?? '',
+      subcategory: product.subcategory || '',
+      hsnCode: product.hsnCode || product.hsn || '',
+      mrp: originalPrice,
+      discountPercent: String(existingDiscount ?? 0),
+      price: calculateSellingPrice(originalPrice, existingDiscount) !== ''
+        ? calculateSellingPrice(originalPrice, existingDiscount)
+        : currentSellingPrice,
+      showDiscountPercent: Boolean(product.showDiscountPercent),
       stock: product.stock ?? '',
       shipping: {
         weight: product.shipping?.weight ?? '',
@@ -918,18 +1055,24 @@ export default function Admin() {
       return
     }
 
-    if (form.mrp === '' || Number(form.mrp) < 0) {
+    if (!String(form.hsnCode || '').trim()) {
+      setError('HSN code is required.')
+      return
+    }
+
+    if (form.mrp === '' || !Number.isFinite(Number(form.mrp)) || Number(form.mrp) < 0) {
       setError('Please enter a valid MRP.')
       return
     }
 
-    if (form.price === '' || Number(form.price) < 0) {
-      setError('Please enter a valid selling price.')
+    if (form.discountPercent === '' || !Number.isFinite(Number(form.discountPercent)) || Number(form.discountPercent) < 0 || Number(form.discountPercent) > 100) {
+      setError('Discount must be between 0 and 100%.')
       return
     }
 
-    if (Number(form.price) > Number(form.mrp)) {
-      setError('Selling price cannot be higher than MRP.')
+    const sellingPrice = calculateSellingPrice(form.mrp, form.discountPercent)
+    if (sellingPrice === '' || !Number.isFinite(sellingPrice) || sellingPrice < 0) {
+      setError('Unable to calculate the selling price. Check MRP and discount.')
       return
     }
 
@@ -973,9 +1116,13 @@ export default function Admin() {
       slug: form.slug.trim().toLowerCase(),
       description: form.description.trim(),
       category: form.category.trim(),
+      subcategory: String(form.subcategory || '').trim(),
+      hsnCode: String(form.hsnCode || '').trim(),
       mrp: Number(form.mrp),
       compareAtPrice: Number(form.mrp),
-      price: Number(form.price),
+      discountPercent: Number(form.discountPercent),
+      price: sellingPrice,
+      showDiscountPercent: Boolean(form.showDiscountPercent),
       stock:
         form.stock === ''
           ? 0
@@ -1106,6 +1253,8 @@ export default function Admin() {
     <main className="page xaaj-admin-v2" data-active-section={activeSection}>
       <style>{`.xaaj-admin-v2{--ink:#25231f;--muted:#777169;--line:#e7e0d6;min-height:100vh!important;max-width:none!important;margin:0!important;padding:0!important;background:radial-gradient(circle at 82% 0%,rgba(154,116,72,.09),transparent 28%),#f7f4ee!important;font-family:'DM Sans',sans-serif;color:var(--ink)}
 .xaaj-admin-v2 *{box-sizing:border-box}.xaaj-admin-v2 .admin-shell{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}.xaaj-admin-v2 .admin-sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,#10271c,#0b1f16);color:#fff;padding:28px 18px;display:flex;flex-direction:column;z-index:20;box-shadow:14px 0 45px rgba(34,29,23,.12)}.xaaj-admin-v2 .brand-mark{padding:6px 12px 30px;border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:22px}.xaaj-admin-v2 .brand-mark strong{font-family:'Playfair Display',serif;font-size:27px;letter-spacing:.08em;font-weight:500}.xaaj-admin-v2 .brand-mark span{display:block;margin-top:5px;color:#bdb5aa;font-size:9px;letter-spacing:.18em;text-transform:uppercase}.xaaj-admin-v2 .side-label{font-size:9px;text-transform:uppercase;letter-spacing:.18em;color:#8f887d;padding:0 12px 10px}.xaaj-admin-v2 .side-nav{display:grid;gap:5px}.xaaj-admin-v2 .side-nav button{width:100%!important;border:0!important;background:transparent!important;color:#bdb7ae!important;box-shadow:none!important;border-radius:12px!important;padding:12px 13px!important;display:flex!important;align-items:center!important;gap:12px!important;text-align:left!important;font:600 12px 'DM Sans',sans-serif!important;transform:none!important}.xaaj-admin-v2 .side-nav button:hover{background:rgba(47,112,72,.28)!important;color:#fff!important;border-color:rgba(82,157,105,.45)!important;transform:translateX(3px)!important}.xaaj-admin-v2 .side-nav button.active{background:linear-gradient(90deg,#2f7048,#245d3b)!important;color:#fff!important;box-shadow:0 8px 22px rgba(47,112,72,.28),inset 3px 0 #8bd19d!important}.xaaj-admin-v2 .side-nav button.active:hover{background:linear-gradient(90deg,#398356,#2f7048)!important}.xaaj-admin-v2 .side-icon{width:25px;height:25px;border:1px solid rgba(255,255,255,.13);border-radius:8px;display:grid;place-items:center;font-size:11px;color:#9dd5aa;flex:none}.xaaj-admin-v2 .side-footer{margin-top:auto;padding:15px 0 4px}.xaaj-admin-v2 .sidebar-logout{width:100%!important;display:flex!important;align-items:center!important;justify-content:center!important;gap:10px!important;background:rgba(255,255,255,.045)!important;color:#d8ddd9!important;border:1px solid rgba(255,255,255,.13)!important;border-radius:12px!important;padding:11px 14px!important;box-shadow:none!important}.xaaj-admin-v2 .sidebar-logout:hover{background:#2f7048!important;border-color:#4d9666!important;color:#fff!important;transform:translateY(-1px)!important;box-shadow:0 8px 20px rgba(47,112,72,.25)!important}.xaaj-admin-v2 .sidebar-logout span:first-child{font-size:15px;color:#9bcda7}.xaaj-admin-v2 .admin-main{min-width:0;padding:28px 34px 70px}.xaaj-admin-v2 .content-width{max-width:1320px;margin:0 auto}.xaaj-admin-v2 .topbar{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:26px;padding:22px 26px;background:rgba(255,253,249,.88);border:1px solid var(--line);border-radius:20px;box-shadow:0 12px 35px rgba(63,53,41,.055);backdrop-filter:blur(10px)}.xaaj-admin-v2 .topbar h1,.xaaj-admin-v2 h1,.xaaj-admin-v2 h2,.xaaj-admin-v2 h3{font-family:'Playfair Display',serif;letter-spacing:-.025em}.xaaj-admin-v2 .topbar h1{font-size:32px!important;margin:3px 0 4px!important}.xaaj-admin-v2 .topbar p{margin:0;color:var(--muted);font-size:13px}.xaaj-admin-v2 .top-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.xaaj-admin-v2 .live-store-btn{display:inline-flex!important;align-items:center!important;gap:9px!important;background:#fff!important;color:#205c36!important;border:1px solid #a9c9b1!important;border-radius:999px!important;padding:10px 15px!important;box-shadow:0 5px 16px rgba(47,112,72,.10)!important}.xaaj-admin-v2 .live-store-btn:hover{background:#2f7048!important;color:#fff!important;border-color:#2f7048!important;box-shadow:0 9px 22px rgba(47,112,72,.24)!important}.xaaj-admin-v2 .live-dot{width:9px;height:9px;border-radius:50%;background:#35a85a;box-shadow:0 0 0 0 rgba(53,168,90,.55);animation:xaaj-live-pulse 1.25s infinite}.xaaj-admin-v2 .live-store-btn:hover .live-dot{background:#fff;box-shadow:0 0 0 0 rgba(255,255,255,.55)}@keyframes xaaj-live-pulse{0%{box-shadow:0 0 0 0 rgba(53,168,90,.55);opacity:1}70%{box-shadow:0 0 0 7px rgba(53,168,90,0);opacity:.72}100%{box-shadow:0 0 0 0 rgba(53,168,90,0);opacity:1}}.xaaj-admin-v2 button,.xaaj-admin-v2 .button{appearance:none!important;border:1px solid #d8d0c4!important;background:#fff!important;color:#292621!important;border-radius:11px!important;padding:10px 15px!important;font:600 12px 'DM Sans',sans-serif!important;cursor:pointer!important;transition:all .2s ease!important;box-shadow:0 2px 0 rgba(0,0,0,.02)!important}.xaaj-admin-v2 button:hover:not(:disabled){transform:translateY(-1px)!important;border-color:#3b8758!important;background:#eef8f1!important;color:#1f5c35!important;box-shadow:0 8px 18px rgba(47,112,72,.12)!important}.xaaj-admin-v2 button.button,.xaaj-admin-v2 button[type=submit]{background:#292621!important;color:#fff!important;border-color:#292621!important;box-shadow:0 7px 18px rgba(41,38,33,.18)!important}.xaaj-admin-v2 button.button:hover,.xaaj-admin-v2 button[type=submit]:hover{background:#2f7048!important;border-color:#2f7048!important;color:#fff!important;box-shadow:0 9px 22px rgba(47,112,72,.24)!important}.xaaj-admin-v2 button:disabled{opacity:.45!important;cursor:not-allowed!important;transform:none!important}.xaaj-admin-v2 section{background:rgba(255,253,249,.94)!important;border:1px solid var(--line)!important;border-radius:20px!important;padding:28px!important;margin-bottom:26px!important;box-shadow:0 12px 35px rgba(63,53,41,.055)!important}.xaaj-admin-v2 .summary{background:linear-gradient(145deg,#fffefa,#f2ece2)!important;border:1px solid #e4dcd1!important;border-radius:18px!important;padding:23px!important;min-height:120px!important;box-shadow:0 10px 25px rgba(57,47,35,.065)!important}.xaaj-admin-v2 .summary strong{font-family:'Playfair Display',serif!important;font-size:30px!important}.xaaj-admin-v2 .summary span{display:block!important;margin-top:7px!important;color:var(--muted)!important;font-size:11px!important;text-transform:uppercase!important;letter-spacing:.12em!important}.xaaj-admin-v2 input:not([type=checkbox]),.xaaj-admin-v2 textarea,.xaaj-admin-v2 select{background:#fffefa!important;border:1px solid #ded7cd!important;border-radius:10px!important;padding:11px 13px!important;color:#2c2925!important;outline:none!important;transition:.2s!important}.xaaj-admin-v2 input:not([type=checkbox]):focus,.xaaj-admin-v2 textarea:focus,.xaaj-admin-v2 select:focus{border-color:#9b7c58!important;box-shadow:0 0 0 4px rgba(139,106,67,.10)!important}.xaaj-admin-v2 label{font-weight:600!important;font-size:12px!important;color:#4c4741!important}.xaaj-admin-v2 img{border-radius:13px}.xaaj-admin-v2 .eyebrow{text-transform:uppercase!important;letter-spacing:.16em!important;font-size:9px!important;font-weight:700!important;color:#9a7954!important}.xaaj-admin-v2 small{color:#8b857d!important}.xaaj-admin-v2[data-active-section=dashboard] [data-admin-section]:not([data-admin-section=dashboard]),.xaaj-admin-v2[data-active-section=announcement] [data-admin-section]:not([data-admin-section=announcement]),.xaaj-admin-v2[data-active-section=hero] [data-admin-section]:not([data-admin-section=hero]),.xaaj-admin-v2[data-active-section=blog] [data-admin-section]:not([data-admin-section=blog]),.xaaj-admin-v2[data-active-section=orders] [data-admin-section]:not([data-admin-section=orders]),.xaaj-admin-v2[data-active-section=products] [data-admin-section]:not([data-admin-section=products]),.xaaj-admin-v2[data-active-section=section-images] [data-admin-section]:not([data-admin-section=section-images]){display:none!important}.xaaj-admin-v2 .side-icon svg{display:block}.xaaj-admin-v2 .sidebar-logout svg{color:#9bcda7;flex:none}.xaaj-admin-v2 .sidebar-logout:hover svg{color:#fff}.xaaj-admin-v2 .live-store-btn svg{flex:none}.xaaj-admin-v2 .product-header-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.xaaj-admin-v2 .product-header-actions button{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:8px!important;min-height:39px!important}.xaaj-admin-v2 .product-add-btn{background:#292621!important;color:#fff!important;border-color:#292621!important;box-shadow:0 7px 18px rgba(41,38,33,.14)!important}.xaaj-admin-v2 .product-add-btn:hover{background:#2f7048!important;border-color:#2f7048!important;color:#fff!important;box-shadow:0 9px 22px rgba(47,112,72,.22)!important}.xaaj-admin-v2 .product-refresh-btn{background:#fff!important;color:#3f3a34!important}.xaaj-admin-v2 .product-refresh-btn:hover{background:#eef8f1!important;color:#1f5c35!important;border-color:#3b8758!important}.xaaj-admin-v2 .is-spinning{animation:xaaj-spin .8s linear infinite}@keyframes xaaj-spin{to{transform:rotate(360deg)}}
+.xaaj-admin-v2 #product-subcategory:disabled{opacity:.62;cursor:not-allowed;background:#f3efe9!important}.xaaj-admin-v2 #show-discount-percent{padding:0!important;border:0!important;box-shadow:none!important}.xaaj-admin-v2 #product-selling-price{background:#f4f0e9!important;color:#5e5144!important;font-weight:700!important}.xaaj-admin-v2 #product-mrp,.xaaj-admin-v2 #product-discount{width:100%;min-width:0}
+@media(max-width:620px){.xaaj-admin-v2 #product-subcategory{grid-column:1 / -1}.xaaj-admin-v2 #product-subcategory + small{grid-column:1 / -1}.xaaj-admin-v2 [data-product-pricing-grid]{grid-template-columns:1fr!important}}
 @media(max-width:900px){.xaaj-admin-v2 .admin-shell{grid-template-columns:1fr}.xaaj-admin-v2 .admin-sidebar{position:sticky;top:0;height:auto;padding:13px 12px}.xaaj-admin-v2 .brand-mark,.xaaj-admin-v2 .side-label{display:none}.xaaj-admin-v2 .side-footer{display:block;margin:0 0 0 8px;padding:0;flex:none}.xaaj-admin-v2 .sidebar-logout{width:auto!important;padding:9px 12px!important}.xaaj-admin-v2 .side-nav{display:flex;overflow-x:auto;gap:5px}.xaaj-admin-v2 .side-nav button{width:auto!important;white-space:nowrap;padding:9px 11px!important}.xaaj-admin-v2 .side-icon{display:none}.xaaj-admin-v2 .admin-main{padding:18px 14px 50px}.xaaj-admin-v2 .topbar{padding:18px}.xaaj-admin-v2 .topbar h1{font-size:27px!important}}
 /* WOODISTRY luxury furniture admin theme — visual overrides only */
 .xaaj-admin-v2{--ink:#241b14!important;--muted:#796d60!important;--line:#e9dfd2!important;background:#f4efe7!important;color:#241b14!important;font-family:'DM Sans',sans-serif!important}
@@ -1745,14 +1894,14 @@ export default function Admin() {
         </section>
 
         {/* =========================
-            Brand Story + Shop by Space Image Management
+            Brand Story + Homepage Collection Image Management
         ========================== */}
         <section data-admin-section="section-images" style={{ marginBottom: '50px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap', marginBottom: '22px' }}>
             <div>
               <span className="eyebrow">HOMEPAGE CONTENT</span>
-              <h2 style={{ margin: '8px 0' }}>Brand Story & Shop by Space</h2>
-              <p style={{ margin: 0, maxWidth: '680px' }}>Change the homepage images using image URLs. Paste a publicly accessible image URL and save to update the storefront.</p>
+              <h2 style={{ margin: '8px 0' }}>Brand Story & Explore Collections</h2>
+              <p style={{ margin: 0, maxWidth: '680px' }}>Manage the four homepage collection cards. Add a publicly accessible image URL for each collection and save to update the storefront.</p>
             </div>
             <button type="button" onClick={loadSectionImages} disabled={loadingSectionImages}>
               <FiRefreshCw size={13} style={{ marginRight: 7 }} />
@@ -1780,7 +1929,7 @@ export default function Admin() {
                 <small style={{ display: 'block', marginTop: '8px' }}>Leave blank to use the storefront fallback image.</small>
               </div>
 
-              {['Living Room', 'Dining', 'Bedroom', 'Storage'].map(spaceName => (
+              {['New Arrivals', 'Dining & Serving', 'Kitchen Essentials', 'Storage & Containers'].map(spaceName => (
                 <div key={spaceName} style={{ border: '1px solid #e9dfd2', borderRadius: '14px', padding: '16px', minWidth: 0 }}>
                   <label htmlFor={`spaceImage-${spaceName}`} style={{ display: 'block', marginBottom: '9px' }}>{spaceName} image URL</label>
                   <input
@@ -1788,7 +1937,7 @@ export default function Admin() {
                     type="url"
                     value={sectionImages.spaces[spaceName] || ''}
                     onChange={e => handleSectionImageChange('space', e.target.value, spaceName)}
-                    placeholder="https://example.com/space-image.jpg"
+                    placeholder="https://example.com/collection-image.jpg"
                     style={{ width: '100%', marginBottom: '12px' }}
                   />
                   <div style={{ aspectRatio: '4 / 3', overflow: 'hidden', borderRadius: '10px', background: 'linear-gradient(110deg,#eee5d9 8%,#f8f4ed 18%,#eee5d9 33%)', backgroundSize: '200% 100%' }}>
@@ -2324,314 +2473,289 @@ export default function Admin() {
         </section>
 
         {/* =========================
-            Add / Edit Product Form
+            Add / Edit Product Form — Woodistry Premium
         ========================== */}
         {showForm && (
-          <section
-            style={{
-              marginBottom: '50px',
-              padding: '28px',
-              border: '1px solid #e5e5e5',
-              borderRadius: '12px'
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '24px',
-                gap: '20px'
-              }}
-            >
-              <div>
-                <span className="eyebrow">
-                  Products
-                </span>
+          <section className="woodistry-product-form-panel">
+            <style>{`
+              .woodistry-product-form-panel{padding:0!important;overflow:hidden;margin-bottom:34px!important;border:1px solid #e4d7c7!important;border-radius:22px!important;background:#fbf8f2!important;box-shadow:0 22px 58px rgba(58,39,22,.09)!important}
+              .woodistry-product-form-panel *{box-sizing:border-box}
+              .woodistry-product-form-header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:28px 32px;background:linear-gradient(115deg,#302116 0%,#4a3321 58%,#60462d 100%);color:#fff8ef;position:relative;overflow:hidden}
+              .woodistry-product-form-header:after{content:'';position:absolute;width:260px;height:260px;border:1px solid rgba(238,211,173,.16);border-radius:50%;right:-68px;top:-160px;box-shadow:0 0 0 32px rgba(238,211,173,.035),0 0 0 66px rgba(238,211,173,.025);pointer-events:none}
+              .woodistry-product-form-header-copy{position:relative;z-index:1;min-width:0}
+              .woodistry-product-form-eyebrow{display:flex;align-items:center;gap:9px;color:#d2b18a;font:700 10px/1.4 'DM Sans',sans-serif;letter-spacing:.2em;text-transform:uppercase}
+              .woodistry-product-form-eyebrow:before{content:'';height:1px;width:26px;background:#c7a277}
+              .woodistry-product-form-header h2{margin:9px 0 5px!important;color:#fff8ef!important;font:500 clamp(26px,3vw,35px)/1.12 'Playfair Display',Georgia,serif!important;letter-spacing:-.035em!important}
+              .woodistry-product-form-header p{margin:0!important;color:#d9c9b6!important;font:400 12px/1.65 'DM Sans',sans-serif!important}
+              .woodistry-product-form-header-actions{position:relative;z-index:1;display:flex;align-items:center;gap:10px;flex-shrink:0}
+              .woodistry-product-form-status{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid rgba(236,212,181,.24);border-radius:999px;color:#ead9c3;background:rgba(255,255,255,.06);font:600 10px 'DM Sans',sans-serif;letter-spacing:.05em;white-space:nowrap}
+              .woodistry-product-form-status:before{content:'';width:6px;height:6px;background:#d8b58a;border-radius:50%}
+              .woodistry-product-form-header .woodistry-form-cancel{padding:10px 14px!important;border:1px solid rgba(239,220,196,.35)!important;border-radius:9px!important;background:transparent!important;color:#fff8ef!important;box-shadow:none!important}
+              .woodistry-product-form-header .woodistry-form-cancel:hover{background:rgba(255,255,255,.1)!important;border-color:#d6b48c!important;color:#fff!important;transform:none!important}
+              .woodistry-product-form{display:flex!important;flex-direction:column;gap:17px!important;padding:24px 28px 28px!important;margin:0!important;max-width:none!important}
+              .woodistry-form-card{min-width:0;padding:22px 23px;border:1px solid #e9e0d5;border-radius:15px;background:rgba(255,254,251,.93);box-shadow:0 5px 18px rgba(57,39,22,.025)}
+              .woodistry-form-card-heading{display:flex;align-items:flex-start;gap:13px;margin:0 0 19px;padding:0 0 15px;border-bottom:1px solid #eee6dc}
+              .woodistry-form-step{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;border-radius:9px;background:#f0e7da;color:#80613e;font:700 11px 'DM Sans',sans-serif;letter-spacing:.04em}
+              .woodistry-form-card-heading h3{margin:0!important;font:500 20px/1.2 'Playfair Display',Georgia,serif!important;letter-spacing:-.02em!important;color:#302317!important}
+              .woodistry-form-card-heading p{margin:5px 0 0!important;color:#8b7c6c!important;font:400 12px/1.55 'DM Sans',sans-serif!important}
+              .woodistry-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px 18px;align-items:start;min-width:0}
+              .woodistry-field{display:flex;flex-direction:column;gap:8px;min-width:0}
+              .woodistry-field label{display:flex;align-items:center;gap:5px;margin:0!important;color:#514438!important;font:700 11px/1.4 'DM Sans',sans-serif!important;letter-spacing:.035em}
+              .woodistry-field label span{color:#a1978a;font-weight:400;letter-spacing:0}
+              .woodistry-field input:not([type=checkbox]),.woodistry-field select,.woodistry-field textarea{display:block;width:100%;min-width:0;min-height:46px;padding:12px 13px!important;border:1px solid #e1d7ca!important;border-radius:9px!important;background:#fffdfa!important;color:#322920!important;font:400 13px/1.5 'DM Sans',sans-serif!important;box-shadow:0 1px 2px rgba(45,31,19,.025)!important;transition:border-color .2s ease,box-shadow .2s ease,background .2s ease!important}
+              .woodistry-field textarea{min-height:132px;resize:vertical}
+              .woodistry-field input::placeholder,.woodistry-field textarea::placeholder{color:#b0a497}
+              .woodistry-field input:focus,.woodistry-field select:focus,.woodistry-field textarea:focus{outline:none!important;border-color:#a98965!important;background:#fff!important;box-shadow:0 0 0 3px rgba(158,121,79,.12)!important}
+              .woodistry-field small,.woodistry-field-hint{display:block;color:#918477!important;font:400 11px/1.6 'DM Sans',sans-serif!important}
+              .woodistry-form-span-2{grid-column:1/-1}
+              .woodistry-subcategory-box{padding:17px;border:1px solid #e7dccf;border-radius:12px;background:#f8f3eb;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+              .woodistry-subcategory-note{grid-column:1/-1;margin:0;color:#8c7d6d;font:400 11px/1.6 'DM Sans',sans-serif}
+              .woodistry-pricing-card{background:linear-gradient(145deg,#f8f3eb,#f3ece1);border-color:#e5d8c7}
+              .woodistry-pricing-card .woodistry-form-card-heading{border-bottom-color:#e3d5c3}
+              .woodistry-price-field{position:relative}
+              .woodistry-price-field .woodistry-price-symbol{position:absolute;left:13px;top:14px;color:#9c876f;font:600 13px 'DM Sans',sans-serif;pointer-events:none}
+              .woodistry-price-field input{padding-left:29px!important}
+              .woodistry-selling-price input{background:#eee5d8!important;border-color:#ddcbb5!important;color:#4a3420!important;font-weight:700!important}
+              .woodistry-discount-toggle{display:flex;align-items:center;gap:10px;padding:13px 14px;border:1px solid #e2d6c6;border-radius:10px;background:rgba(255,253,249,.8);min-height:46px}
+              .woodistry-discount-toggle input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:#62452b;flex-shrink:0}
+              .woodistry-discount-toggle label{cursor:pointer;margin:0!important;color:#584938!important;font:600 11px/1.5 'DM Sans',sans-serif!important}
+              .woodistry-customer-preview{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:18px;padding:17px 19px;border:1px solid #e5d4bd;border-radius:12px;background:#fffdfa;box-shadow:0 6px 18px rgba(67,43,22,.045)}
+              .woodistry-customer-preview-label{margin-bottom:5px;color:#897764;font:700 9px/1.4 'DM Sans',sans-serif;letter-spacing:.16em;text-transform:uppercase}
+              .woodistry-customer-preview-title{color:#352719;font:500 17px/1.25 'Playfair Display',Georgia,serif}
+              .woodistry-customer-prices{display:flex;justify-content:flex-end;align-items:baseline;gap:9px;flex-wrap:wrap;text-align:right}
+              .woodistry-customer-prices strong{color:#342519;font:700 21px/1.2 'DM Sans',sans-serif;letter-spacing:-.035em}
+              .woodistry-customer-prices del{color:#9c9082;font:400 12px 'DM Sans',sans-serif}
+              .woodistry-discount-badge{display:inline-flex;align-items:center;padding:5px 8px;border-radius:5px;background:#e9ddcc;color:#6e4825;font:700 9px 'DM Sans',sans-serif;letter-spacing:.04em}
+              .woodistry-product-image-row{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;margin-bottom:10px;padding:9px;border:1px solid #eee5da;border-radius:11px;background:#fffdfa}
+              .woodistry-product-image-index{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:#f1e8dc;color:#876746;font:700 10px 'DM Sans',sans-serif}
+              .woodistry-product-image-row input{width:100%;min-width:0}
+              .woodistry-product-image-preview{display:block;width:44px;height:44px;object-fit:cover;border-radius:7px;border:1px solid #e6dacb;background:#f4eee5}
+              .woodistry-product-image-placeholder{display:grid;place-items:center;width:44px;height:44px;border:1px dashed #d9cbbb;border-radius:7px;color:#a08b72;font:500 8px 'DM Sans',sans-serif;text-align:center}
+              .woodistry-add-image{display:inline-flex!important;align-items:center!important;gap:8px!important;margin-top:3px!important;padding:10px 13px!important;border:1px solid #d7c5ae!important;border-radius:8px!important;background:#f6efe5!important;color:#65472b!important;font:700 11px 'DM Sans',sans-serif!important;box-shadow:none!important}
+              .woodistry-add-image:hover{background:#eee2d2!important;border-color:#b99b79!important;transform:translateY(-1px)!important}
+              .woodistry-product-form-footer{position:sticky;bottom:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:17px 21px;margin:0 -28px -28px;border-top:1px solid #e7dccf;background:rgba(251,248,242,.96);backdrop-filter:blur(12px)}
+              .woodistry-product-form-footer-note{color:#928270;font:400 11px/1.5 'DM Sans',sans-serif}
+              .woodistry-product-form-footer-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+              .woodistry-product-form-footer .woodistry-save-product{display:inline-flex!important;justify-content:center!important;align-items:center!important;gap:9px!important;min-height:44px!important;padding:12px 19px!important;border:1px solid #49301d!important;border-radius:9px!important;background:#49301d!important;color:#fff8ef!important;font:700 11px 'DM Sans',sans-serif!important;letter-spacing:.04em!important;box-shadow:0 8px 18px rgba(73,48,29,.16)!important}
+              .woodistry-product-form-footer .woodistry-save-product:hover:not(:disabled){background:#694a2d!important;border-color:#694a2d!important;color:#fff!important;transform:translateY(-1px)!important}
+              .woodistry-product-form-footer .woodistry-cancel-product{min-height:44px!important;padding:11px 16px!important;border:1px solid #dfd3c4!important;border-radius:9px!important;background:transparent!important;color:#6e5d4b!important;font:700 11px 'DM Sans',sans-serif!important;box-shadow:none!important}
+              .woodistry-product-form-footer .woodistry-cancel-product:hover:not(:disabled){background:#f0e7da!important;color:#49301d!important;transform:none!important}
+              @media(max-width:760px){.woodistry-product-form-header{padding:23px 20px;align-items:flex-start}.woodistry-product-form-header-actions{flex-direction:column;align-items:flex-end}.woodistry-product-form-status{font-size:9px}.woodistry-product-form{padding:17px 14px 22px!important;gap:13px!important}.woodistry-form-card{padding:17px 15px}.woodistry-form-grid{grid-template-columns:1fr;gap:14px}.woodistry-form-span-2,.woodistry-customer-preview{grid-column:1}.woodistry-subcategory-box{grid-template-columns:1fr}.woodistry-subcategory-note{grid-column:1}.woodistry-customer-preview{align-items:flex-start;flex-direction:column}.woodistry-customer-prices{justify-content:flex-start;text-align:left}.woodistry-product-form-footer{margin:0 -14px -22px;padding:14px;align-items:flex-start;flex-direction:column}.woodistry-product-form-footer-actions{width:100%}.woodistry-product-form-footer-actions button{flex:1}.woodistry-product-form-footer-note{display:none}}
+              @media(max-width:420px){.woodistry-product-form-header{gap:10px}.woodistry-product-form-header p{max-width:230px}.woodistry-product-form-status{display:none}.woodistry-product-form-image-row{grid-template-columns:30px minmax(0,1fr) 36px}.woodistry-product-image-preview,.woodistry-product-image-placeholder{width:36px;height:36px}.woodistry-product-form-footer-actions{gap:7px}}
+              @media(prefers-reduced-motion:reduce){.woodistry-product-form-panel *{scroll-behavior:auto!important;transition:none!important}}
+              /* Layout correction: isolate this form from legacy checkout/admin form rules. */
+              .xaaj-admin-v2 .woodistry-product-form-panel{display:block!important;width:100%!important;max-width:none!important;min-width:0!important;grid-column:1 / -1!important;align-self:stretch!important;}
+              .xaaj-admin-v2 .woodistry-product-form-panel > .woodistry-product-form-header{width:100%!important;}
+              .xaaj-admin-v2 form.woodistry-product-form{display:flex!important;flex:1 1 auto!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form > .woodistry-form-card{display:block!important;flex:0 0 auto!important;align-self:stretch!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-form-grid{display:grid!important;width:100%!important;max-width:none!important;min-width:0!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;align-items:start!important;gap:18px 20px!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field{display:flex!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;gap:8px!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field label{display:flex!important;width:100%!important;max-width:none!important;white-space:normal!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field input:not([type=checkbox]),.xaaj-admin-v2 .woodistry-product-form .woodistry-field select,.xaaj-admin-v2 .woodistry-product-form .woodistry-field textarea{display:block!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-form-span-2{grid-column:1 / -1!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-box{display:grid!important;grid-column:1 / -1!important;grid-template-columns:minmax(0,1fr)!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-note{grid-column:1!important;width:100%!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-pricing-card .woodistry-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-discount-toggle{display:flex!important;align-items:center!important;align-self:start!important;gap:10px!important;width:100%!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-discount-toggle label{display:block!important;min-width:0!important;line-height:1.5!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-customer-preview{display:flex!important;grid-column:1 / -1!important;width:100%!important;max-width:none!important;min-width:0!important;justify-content:space-between!important;align-items:center!important;gap:18px!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-customer-prices{display:flex!important;flex-wrap:wrap!important;align-items:baseline!important;gap:10px!important;max-width:100%!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-product-image-row{display:grid!important;grid-template-columns:38px minmax(0,1fr) auto!important;width:100%!important;max-width:none!important;min-width:0!important;}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-product-image-row input{width:100%!important;min-width:0!important;}
+              @media(max-width:760px){
+                .xaaj-admin-v2 form.woodistry-product-form{padding:17px 14px 22px!important;gap:13px!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-form-card{padding:17px 15px!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-form-grid,.xaaj-admin-v2 .woodistry-product-form .woodistry-pricing-card .woodistry-form-grid{grid-template-columns:minmax(0,1fr)!important;gap:14px!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-form-span-2,.xaaj-admin-v2 .woodistry-product-form .woodistry-customer-preview,.xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-box{grid-column:1!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-box{grid-template-columns:minmax(0,1fr)!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-note{grid-column:1!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-customer-preview{align-items:flex-start!important;flex-direction:column!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-customer-prices{justify-content:flex-start!important;text-align:left!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer{margin:0 -14px -22px!important;padding:14px!important;align-items:flex-start!important;flex-direction:column!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer-actions{width:100%!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer-actions button{flex:1 1 0!important;}
+              }
+              @media(max-width:420px){
+                .xaaj-admin-v2 .woodistry-product-form-header{gap:10px!important;align-items:flex-start!important;}
+                .xaaj-admin-v2 .woodistry-product-form-header-actions{flex-direction:column!important;align-items:flex-end!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-image-row{grid-template-columns:30px minmax(0,1fr) 36px!important;gap:7px!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-image-preview,.xaaj-admin-v2 .woodistry-product-form .woodistry-product-image-placeholder{width:36px!important;height:36px!important;}
+                .xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer-actions{gap:7px!important;}
+              }
+              /* Higher-specificity admin overrides keep the product composer isolated from legacy section/form styles. */
+              .xaaj-admin-v2 .woodistry-product-form-panel{padding:0!important;margin-bottom:34px!important;overflow:hidden!important;border:1px solid #e4d7c7!important;border-radius:22px!important;background:#fbf8f2!important;box-shadow:0 22px 58px rgba(58,39,22,.09)!important}
+              .xaaj-admin-v2 form.woodistry-product-form{display:flex!important;flex-direction:column!important;gap:17px!important;padding:24px 28px 28px!important;margin:0!important;width:100%!important;max-width:none!important;background:transparent!important;border:0!important;box-shadow:none!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-form-card{display:block!important;min-width:0!important;padding:22px 23px!important;margin:0!important;border:1px solid #e9e0d5!important;border-radius:15px!important;background:rgba(255,254,251,.97)!important;box-shadow:0 5px 18px rgba(57,39,22,.025)!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-pricing-card{background:linear-gradient(145deg,#f8f3eb,#f3ece1)!important;border-color:#e5d8c7!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-form-card-heading h3{font:500 20px/1.2 'Playfair Display',Georgia,serif!important;color:#302317!important;margin:0!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field input:not([type=checkbox]),.xaaj-admin-v2 .woodistry-product-form .woodistry-field select,.xaaj-admin-v2 .woodistry-product-form .woodistry-field textarea{width:100%!important;min-width:0!important;min-height:46px!important;padding:12px 13px!important;border:1px solid #e1d7ca!important;border-radius:9px!important;background:#fffdfa!important;color:#322920!important;font:400 13px/1.5 'DM Sans',sans-serif!important;box-shadow:0 1px 2px rgba(45,31,19,.025)!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field textarea{min-height:132px!important;resize:vertical!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field input:focus,.xaaj-admin-v2 .woodistry-product-form .woodistry-field select:focus,.xaaj-admin-v2 .woodistry-product-form .woodistry-field textarea:focus{outline:none!important;border-color:#a98965!important;background:#fff!important;box-shadow:0 0 0 3px rgba(158,121,79,.12)!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-field label{display:flex!important;align-items:center!important;gap:5px!important;margin:0!important;color:#514438!important;font:700 11px/1.4 'DM Sans',sans-serif!important;letter-spacing:.035em!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-form-card-heading{margin:0 0 19px!important;padding:0 0 15px!important;border-bottom:1px solid #eee6dc!important}
+              .xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer{margin:0 -28px -28px!important}
+              @media(max-width:760px){.xaaj-admin-v2 form.woodistry-product-form{padding:17px 14px 22px!important;gap:13px!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-form-card{padding:17px 15px!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-form-grid{grid-template-columns:minmax(0,1fr)!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-form-span-2,.xaaj-admin-v2 .woodistry-product-form .woodistry-customer-preview{grid-column:1!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-box{grid-template-columns:minmax(0,1fr)!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-subcategory-note{grid-column:1!important}.xaaj-admin-v2 .woodistry-product-form .woodistry-product-form-footer{margin:0 -14px -22px!important;padding:14px!important}}
+            `}</style>
 
-                <h2>
-                  {editingId
-                    ? 'Edit Product'
-                    : 'Add Product'}
-                </h2>
+            <div className="woodistry-product-form-header">
+              <div className="woodistry-product-form-header-copy">
+                <span className="woodistry-product-form-eyebrow">Product workspace</span>
+                <h2>{editingId ? 'Edit Product' : 'Add a Product'}</h2>
+                <p>Manage product details, pricing and fulfilment for the Woodistry store.</p>
               </div>
-
-              <button
-                type="button"
-                onClick={handleCancel}
-                style={{
-                  padding: '8px 14px',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
+              <div className="woodistry-product-form-header-actions">
+                <span className="woodistry-product-form-status">{editingId ? 'Editing existing item' : 'New product draft'}</span>
+                <button type="button" className="woodistry-form-cancel" onClick={handleCancel}>Close</button>
+              </div>
             </div>
 
-            <form
-              onSubmit={handleSubmit}
-              className="checkout-form"
-            >
-
-              {/* Product Name */}
-              <label>
-                Product Name *
-              </label>
-
-              <input
-                name="name"
-                value={form.name}
-                onChange={handleChange}
-                placeholder="Example: Ivory Dinner Set"
-                required
-              />
-
-              {/* Slug */}
-              <label>
-                Slug *
-              </label>
-
-              <input
-                name="slug"
-                value={form.slug}
-                onChange={handleChange}
-                placeholder="ivory-dinner-set"
-                required
-              />
-
-              {/* Category */}
-              <label>
-                Category *
-              </label>
-
-              <select
-                name="category"
-                value={form.category}
-                onChange={handleChange}
-                required
-              >
-                <option value="">
-                  Select Category
-                </option>
-                <option value="Living Room">Living Room</option>
-                <option value="Dining">Dining</option>
-                <option value="Bedroom">Bedroom</option>
-                <option value="Gift">Gift</option>
-              </select>
-
-              {/* MRP */}
-              <label>
-                MRP (Original Price) *
-              </label>
-
-              <input
-                name="mrp"
-                value={form.mrp}
-                onChange={handleChange}
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="450.00"
-                required
-              />
-
-              <small>
-                This price will appear crossed out only when it is higher than the selling price.
-              </small>
-
-              {/* Selling Price */}
-              <label>
-                Selling Price *
-              </label>
-
-              <input
-                name="price"
-                value={form.price}
-                onChange={handleChange}
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="249.00"
-                required
-              />
-
-              {/* Stock */}
-              <label>
-                Stock
-              </label>
-
-              <input
-                name="stock"
-                value={form.stock}
-                onChange={handleChange}
-                type="number"
-                min="0"
-                step="1"
-                placeholder="20"
-              />
-
-              {/* Velocity Shipping Package Details */}
-              <div
-                style={{
-                  marginTop: '18px',
-                  marginBottom: '18px',
-                  padding: '18px',
-                  border: '1px solid #e5e5e5',
-                  borderRadius: '10px',
-                  background: '#faf9f6'
-                }}
-              >
-                <h3 style={{ margin: '0 0 6px' }}>Shipping Package Details</h3>
-                <p style={{ margin: '0 0 16px', color: '#666', fontSize: '13px' }}>
-                  Required for Velocity Shipping. Weight in kg and dimensions in cm.
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-                  <div><label htmlFor="product-weight">Weight (kg) *</label><input id="product-weight" type="number" name="weight" value={form.shipping.weight} onChange={handleShippingChange} placeholder="Example: 2.5" min="0.001" step="0.001" required /></div>
-                  <div><label htmlFor="product-length">Length (cm) *</label><input id="product-length" type="number" name="length" value={form.shipping.length} onChange={handleShippingChange} placeholder="Example: 35" min="0.1" step="0.1" required /></div>
-                  <div><label htmlFor="product-breadth">Breadth (cm) *</label><input id="product-breadth" type="number" name="breadth" value={form.shipping.breadth} onChange={handleShippingChange} placeholder="Example: 30" min="0.1" step="0.1" required /></div>
-                  <div><label htmlFor="product-height">Height (cm) *</label><input id="product-height" type="number" name="height" value={form.shipping.height} onChange={handleShippingChange} placeholder="Example: 15" min="0.1" step="0.1" required /></div>
+            <form onSubmit={handleSubmit} className="woodistry-product-form">
+              <section className="woodistry-form-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">01</span>
+                  <div><h3>Product information</h3><p>Start with a clear name and customer-friendly description.</p></div>
                 </div>
-              </div>
+                <div className="woodistry-form-grid">
+                  <div className="woodistry-field">
+                    <label htmlFor="product-name">Product name *</label>
+                    <input id="product-name" name="name" value={form.name} onChange={handleChange} placeholder="Example: Indigo Lace Pasta Plate" required />
+                  </div>
+                  <div className="woodistry-field">
+                    <label htmlFor="product-slug">Product slug *</label>
+                    <input id="product-slug" name="slug" value={form.slug} onChange={handleChange} placeholder="indigo-lace-pasta-plate" required />
+                    <small>Used in the product page URL.</small>
+                  </div>
+                  <div className="woodistry-field woodistry-form-span-2">
+                    <label htmlFor="product-description">Product description *</label>
+                    <textarea id="product-description" name="description" value={form.description} onChange={handleChange} placeholder="Describe the product, its design and how it can be used..." rows={4} required />
+                  </div>
+                </div>
+              </section>
 
-              {/* Product Description */}
-              <label>
-                Product Description *
-              </label>
+              <section className="woodistry-form-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">02</span>
+                  <div><h3>Category & product classification</h3><p>Organise this item so customers can find it in the right collection.</p></div>
+                </div>
+                <div className="woodistry-form-grid">
+                  <div className="woodistry-field woodistry-form-span-2">
+                    <label htmlFor="product-category">Category *</label>
+                    <select id="product-category" name="category" value={form.category} onChange={handleChange} required>
+                      <option value="">Select category</option>
+                      {Object.keys(productCategoryMap).map(category => <option value={category} key={category}>{category}</option>)}
+                      {form.category && !Object.prototype.hasOwnProperty.call(productCategoryMap, form.category) && <option value={form.category}>{form.category}</option>}
+                    </select>
+                  </div>
+                  <div className="woodistry-subcategory-box woodistry-form-span-2">
+                    <div className="woodistry-field">
+                      <label htmlFor="product-subcategory">Subcategory <span>(Optional)</span></label>
+                      <select id="product-subcategory" name="subcategory" value={form.subcategory} onChange={handleChange} disabled={!form.category || !productCategoryMap[form.category]}>
+                        <option value="">Select subcategory</option>
+                        {(productCategoryMap[form.category] || []).map(subcategory => <option value={subcategory} key={subcategory}>{subcategory}</option>)}
+                        {form.subcategory && !(productCategoryMap[form.category] || []).includes(form.subcategory) && <option value={form.subcategory}>{form.subcategory}</option>}
+                      </select>
+                    </div>
+                    <p className="woodistry-subcategory-note">{form.category ? `Choose a subcategory within ${form.category}.` : 'Choose a category first to see available subcategories.'}</p>
+                  </div>
+                  <div className="woodistry-field woodistry-form-span-2">
+                    <label htmlFor="product-hsn-code">HSN code *</label>
+                    <input id="product-hsn-code" name="hsnCode" value={form.hsnCode} onChange={handleChange} placeholder="Enter product HSN code" autoComplete="off" required />
+                    <small>Use the HSN code applicable to this specific product.</small>
+                  </div>
+                </div>
+              </section>
 
-              <textarea
-                name="description"
-                value={form.description}
-                onChange={handleChange}
-                placeholder="Write the main product description..."
-                rows={6}
-                required
-              />
+              <section className="woodistry-form-card woodistry-pricing-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">03</span>
+                  <div><h3>Product pricing</h3><p>Set the original price and discount. The selling price is calculated automatically.</p></div>
+                </div>
+                <div className="woodistry-form-grid">
+                  <div className="woodistry-field">
+                    <label htmlFor="product-mrp">MRP *</label>
+                    <div className="woodistry-price-field"><span className="woodistry-price-symbol">$</span><input id="product-mrp" name="mrp" value={form.mrp} onChange={handleChange} type="number" min="0" step="0.01" placeholder="149.00" required /></div>
+                    <small>Original retail price in USD.</small>
+                  </div>
+                  <div className="woodistry-field">
+                    <label htmlFor="product-discount">Discount (%)</label>
+                    <input id="product-discount" name="discountPercent" value={form.discountPercent} onChange={handleChange} type="number" min="0" max="100" step="0.01" placeholder="0" />
+                    <small>Enter 0 if the product is not discounted. Maximum 100%.</small>
+                  </div>
+                  <div className="woodistry-field woodistry-selling-price">
+                    <label htmlFor="product-selling-price">Selling price · Auto-calculated</label>
+                    <div className="woodistry-price-field"><span className="woodistry-price-symbol">$</span><input id="product-selling-price" value={form.price === '' ? '' : Number(form.price).toFixed(2)} type="text" readOnly aria-readonly="true" placeholder="Calculated automatically" /></div>
+                    <small>Calculated from MRP minus the selected discount.</small>
+                  </div>
+                  <div className="woodistry-discount-toggle">
+                    <input id="show-discount-percent" name="showDiscountPercent" type="checkbox" checked={Boolean(form.showDiscountPercent)} onChange={handleChange} />
+                    <label htmlFor="show-discount-percent">Show discount percentage to customers</label>
+                  </div>
+                  <div className="woodistry-customer-preview">
+                    <div><div className="woodistry-customer-preview-label">Storefront preview</div><div className="woodistry-customer-preview-title">Customer price display</div></div>
+                    <div className="woodistry-customer-prices">
+                      <strong>{formatUSD(calculateSellingPrice(form.mrp, form.discountPercent) === '' ? 0 : calculateSellingPrice(form.mrp, form.discountPercent))}</strong>
+                      {Number(form.mrp) > Number(calculateSellingPrice(form.mrp, form.discountPercent)) && <del>{formatUSD(form.mrp)} MRP</del>}
+                      {form.showDiscountPercent && Number(form.discountPercent) > 0 && <span className="woodistry-discount-badge">{Number(form.discountPercent)}% OFF</span>}
+                    </div>
+                  </div>
+                </div>
+              </section>
 
-              {/* Product Details & Care */}
-              <label>
-                Product Details & Care
-              </label>
+              <section className="woodistry-form-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">04</span>
+                  <div><h3>Inventory & shipping</h3><p>Keep stock and parcel measurements ready for fulfilment.</p></div>
+                </div>
+                <div className="woodistry-form-grid">
+                  <div className="woodistry-field">
+                    <label htmlFor="product-stock">Available stock</label>
+                    <input id="product-stock" name="stock" value={form.stock} onChange={handleChange} type="number" min="0" step="1" placeholder="20" />
+                    <small>Enter the number of units available to sell.</small>
+                  </div>
+                  <div className="woodistry-field"><label>Shipping units</label><div style={{ minHeight: 46, display: 'flex', alignItems: 'center', padding: '0 13px', border: '1px solid #e5dbcf', borderRadius: 9, background: '#f6f0e7', color: '#87745e', fontSize: 12 }}>Weight in kg · Dimensions in cm</div></div>
+                  <div className="woodistry-field"><label htmlFor="product-weight">Package weight (kg) *</label><input id="product-weight" type="number" name="weight" value={form.shipping.weight} onChange={handleShippingChange} placeholder="Example: 2.5" min="0.001" step="0.001" required /></div>
+                  <div className="woodistry-field"><label htmlFor="product-length">Package length (cm) *</label><input id="product-length" type="number" name="length" value={form.shipping.length} onChange={handleShippingChange} placeholder="Example: 35" min="0.1" step="0.1" required /></div>
+                  <div className="woodistry-field"><label htmlFor="product-breadth">Package breadth (cm) *</label><input id="product-breadth" type="number" name="breadth" value={form.shipping.breadth} onChange={handleShippingChange} placeholder="Example: 30" min="0.1" step="0.1" required /></div>
+                  <div className="woodistry-field"><label htmlFor="product-height">Package height (cm) *</label><input id="product-height" type="number" name="height" value={form.shipping.height} onChange={handleShippingChange} placeholder="Example: 15" min="0.1" step="0.1" required /></div>
+                </div>
+              </section>
 
-              <textarea
-                name="productDetails"
-                value={form.productDetails}
-                onChange={handleChange}
-                placeholder="Material, size, dimensions, care instructions, what's included, etc."
-                rows={6}
-              />
+              <section className="woodistry-form-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">05</span>
+                  <div><h3>Details, care & policies</h3><p>Add useful product information and after-sales details.</p></div>
+                </div>
+                <div className="woodistry-form-grid">
+                  <div className="woodistry-field woodistry-form-span-2"><label htmlFor="product-details">Product details & care</label><textarea id="product-details" name="productDetails" value={form.productDetails} onChange={handleChange} placeholder="Material, size, dimensions, care instructions, what's included..." rows={4} /></div>
+                  <div className="woodistry-field"><label htmlFor="product-shipping-payment">Shipping & payment</label><textarea id="product-shipping-payment" name="shippingPayment" value={form.shippingPayment} onChange={handleChange} placeholder="Delivery time, shipping charges, payment information..." rows={4} /></div>
+                  <div className="woodistry-field"><label htmlFor="product-return-exchange">Returns & exchanges</label><textarea id="product-return-exchange" name="returnExchange" value={form.returnExchange} onChange={handleChange} placeholder="Return window, exchange conditions and process..." rows={4} /></div>
+                </div>
+              </section>
 
-              {/* Shipping & Payment */}
-              <label>
-                Shipping & Payment
-              </label>
-
-              <textarea
-                name="shippingPayment"
-                value={form.shippingPayment}
-                onChange={handleChange}
-                placeholder="Delivery time, shipping charges, payment information, etc."
-                rows={5}
-              />
-
-              {/* Return & Exchange */}
-              <label>
-                Return & Exchange
-              </label>
-
-              <textarea
-                name="returnExchange"
-                value={form.returnExchange}
-                onChange={handleChange}
-                placeholder="Return window, exchange conditions and process..."
-                rows={5}
-              />
-
-              {/* Multiple Product Images */}
-              <label>
-                Product Images *
-              </label>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gap: '10px'
-                }}
-              >
+              <section className="woodistry-form-card">
+                <div className="woodistry-form-card-heading">
+                  <span className="woodistry-form-step">06</span>
+                  <div><h3>Product imagery</h3><p>Use clear, high-quality images. The first image becomes the main product image.</p></div>
+                </div>
                 {form.images.map((image, index) => (
-                  <div
-                    key={index}
-                    style={{
-                      display: 'flex',
-                      gap: '8px',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <input
-                      value={image}
-                      onChange={e =>
-                        handleImageChange(index, e.target.value)
-                      }
-                      placeholder={`Image URL ${index + 1}`}
-                      style={{ flex: 1 }}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => removeImageField(index)}
-                      disabled={form.images.length === 1}
-                      title="Remove image"
-                    >
-                      Remove
-                    </button>
+                  <div key={index} className="woodistry-product-image-row">
+                    <span className="woodistry-product-image-index">{String(index + 1).padStart(2, '0')}</span>
+                    <input aria-label={`Product image URL ${index + 1}`} value={image} onChange={e => handleImageChange(index, e.target.value)} placeholder={index === 0 ? 'Main product image URL *' : `Additional image URL ${index + 1}`} />
+                    {image.trim() ? <img className="woodistry-product-image-preview" src={image.trim()} alt={`Product image ${index + 1} preview`} loading="lazy" onError={e => { e.currentTarget.style.visibility = 'hidden' }} /> : <span className="woodistry-product-image-placeholder">Preview</span>}
+                    <button type="button" onClick={() => removeImageField(index)} disabled={form.images.length === 1} title="Remove image" aria-label={`Remove image ${index + 1}`}>Remove</button>
                   </div>
                 ))}
+                <button type="button" className="woodistry-add-image" onClick={addImageField}><FiPlus size={14} /> Add another image</button>
+                <small className="woodistry-field-hint" style={{ marginTop: 10 }}>Add at least one working image URL. Use alternate angles and detail shots where available.</small>
+              </section>
+
+              <div className="woodistry-product-form-footer">
+                <div className="woodistry-product-form-footer-note">Fields marked * are required before saving.</div>
+                <div className="woodistry-product-form-footer-actions">
+                  <button type="button" className="woodistry-cancel-product" onClick={handleCancel} disabled={saving}>Cancel</button>
+                  <button type="submit" className="woodistry-save-product" disabled={saving}>{saving ? 'Saving product…' : editingId ? 'Save product changes' : 'Add product to store'} <FiPlus size={14} /></button>
+                </div>
               </div>
-
-              <button
-                type="button"
-                onClick={addImageField}
-                style={{
-                  marginTop: '8px',
-                  width: 'fit-content'
-                }}
-              >
-                + Add Another Image
-              </button>
-
-              <small>
-                Add as many product images as needed. The first image is used as the main product image.
-              </small>
-
-              {/* Buttons */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '12px',
-                  flexWrap: 'wrap',
-                  marginTop: '10px'
-                }}
-              >
-                <button
-                  type="submit"
-                  className="button"
-                  disabled={saving}
-                >
-                  {saving
-                    ? 'Saving...'
-                    : editingId
-                      ? 'Update Product'
-                      : 'Add Product'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleCancel}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-              </div>
-
             </form>
           </section>
         )}

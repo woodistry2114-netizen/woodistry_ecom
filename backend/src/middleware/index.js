@@ -6,13 +6,49 @@ import { env } from '../config/env.js'
 // WOODISTRY PRODUCT CATEGORIES
 // ============================================================
 
-const WOODISTRY_CATEGORIES = [
+// Current Woodistry storefront categories.
+const WOODISTRY_CATEGORY_MAP = {
+  'Dining & Serving': [
+    'Serving Trays',
+    'Serving Platters',
+    'Platters',
+    'Cake Stands',
+    'Tea Coasters',
+    'Cups & Mugs',
+    'Salad Bowls',
+    'Napkin Holders'
+  ],
+  'Kitchen Essentials': [
+    'Spice Boxes',
+    'Chopping Boards',
+    'Mortar & Pestle',
+    'Serving & Cooking Spoons',
+    'Cutlery Holders',
+    'Kitchen Organisers'
+  ],
+  'Storage & Containers': [
+    'Dry Fruit Boxes',
+    'Bowls & Jars',
+    'Refreshment Jars',
+    'Casseroles',
+    'Folding & Fruit Baskets'
+  ]
+}
+
+// Keep legacy furniture categories accepted so older product data and
+// existing update flows are not rejected while the catalogue is migrated.
+const LEGACY_WOODISTRY_CATEGORIES = [
   'Living Room',
   'Sofas & Chairs',
   'Dining',
   'Bedroom',
   'Tables',
   'Storage'
+]
+
+const WOODISTRY_CATEGORIES = [
+  ...Object.keys(WOODISTRY_CATEGORY_MAP),
+  ...LEGACY_WOODISTRY_CATEGORIES
 ]
 
 // ============================================================
@@ -234,6 +270,21 @@ export const productSchema = z.object({
           }
         ),
 
+      // Subcategory must belong to the selected current category.
+      // It remains optional for legacy furniture products during migration.
+      subcategory: z
+        .string()
+        .trim()
+        .max(100, 'Subcategory cannot exceed 100 characters')
+        .optional(),
+
+      // HSN is stored as a string to preserve any leading zeroes.
+      hsnCode: z
+        .string()
+        .trim()
+        .min(1, 'HSN code is required')
+        .max(20, 'HSN code cannot exceed 20 characters'),
+
       // ------------------------------------------------------
       // MRP / ORIGINAL PRICE
       // ------------------------------------------------------
@@ -253,6 +304,19 @@ export const productSchema = z.object({
         .number()
         .finite('Selling price must be a valid number')
         .nonnegative('Selling price cannot be negative'),
+
+      // Discount data sent by the Admin Add/Edit Product form.
+      discountPercent: z
+        .coerce
+        .number()
+        .finite('Discount must be a valid number')
+        .min(0, 'Discount cannot be negative')
+        .max(100, 'Discount cannot exceed 100%')
+        .optional(),
+
+      showDiscountPercent: z
+        .boolean()
+        .optional(),
 
       // ------------------------------------------------------
       // BACKWARD COMPATIBILITY
@@ -402,6 +466,40 @@ export const productSchema = z.object({
           message:
             'Selling price cannot be higher than MRP'
         })
+      }
+
+      // Validate category/subcategory combinations for Woodistry's current
+      // catalogue. Legacy category values remain accepted for old products.
+      const allowedSubcategories = WOODISTRY_CATEGORY_MAP[data.category]
+      if (allowedSubcategories) {
+        if (!data.subcategory) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['subcategory'],
+            message: 'Please select a subcategory'
+          })
+        } else if (!allowedSubcategories.includes(data.subcategory)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['subcategory'],
+            message: 'Subcategory does not belong to the selected category'
+          })
+        }
+      }
+
+      // When the Admin UI supplies a discount, ensure the price matches it.
+      // Older clients that omit discountPercent retain the legacy price rule.
+      if (data.discountPercent !== undefined) {
+        const expectedPrice = Number(
+          (data.mrp * (1 - data.discountPercent / 100)).toFixed(2)
+        )
+        if (Math.abs(data.price - expectedPrice) > 0.01) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['price'],
+            message: 'Selling price must match MRP after applying the discount'
+          })
+        }
       }
     }),
 
